@@ -5,6 +5,12 @@
 #include <stddef.h>
 
 #include "stm32f4xx_hal.h"
+#include "FreeRTOS.h"
+#include "task.h"
+#include "queue.h"
+#include "semphr.h"
+#include "timers.h"
+#include "event_groups.h"
 
 #include "board_config.h"
 #include "digital_io.h"
@@ -14,8 +20,6 @@
 #include "ethernet.h"
 #include "modbus.h"
 #include "modbus_tcp.h"
-
-extern volatile uint32_t sys_tick;
 
 void system_clock_config(void);
 

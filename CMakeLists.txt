@@ -7,7 +7,7 @@ set(CMAKE_C_EXTENSIONS ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE OFF)
 
 set(MCU_FLAGS "-mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard")
-set(MCU_DEFINES "STM32F407xx" "USE_HAL_DRIVER")
+set(MCU_DEFINES "STM32F407xx" "USE_HAL_DRIVER" "USE_FREERTOS")
 
 set(CMAKE_C_FLAGS "${MCU_FLAGS} -Wall -Wextra -Wno-unused-parameter -Os -ffunction-sections -fdata-sections")
 set(CMAKE_C_FLAGS_DEBUG   "-g -O0")
@@ -67,9 +67,34 @@ set(STARTUP_ASM
     "startup/startup_stm32f407xx.s"
 )
 
+set(FREERTOS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/lib/FreeRTOS")
+
+if(EXISTS "${FREERTOS_DIR}")
+    set(FREERTOS_SOURCES
+        "${FREERTOS_DIR}/Source/croutine.c"
+        "${FREERTOS_DIR}/Source/event_groups.c"
+        "${FREERTOS_DIR}/Source/list.c"
+        "${FREERTOS_DIR}/Source/queue.c"
+        "${FREERTOS_DIR}/Source/stream_buffer.c"
+        "${FREERTOS_DIR}/Source/tasks.c"
+        "${FREERTOS_DIR}/Source/timers.c"
+        "${FREERTOS_DIR}/Source/portable/GCC/ARM_CM4F/port.c"
+        "${FREERTOS_DIR}/Source/portable/MemMang/heap_4.c"
+    )
+    set(FREERTOS_INCLUDES
+        "${FREERTOS_DIR}/Source/include"
+        "${FREERTOS_DIR}/Source/portable/GCC/ARM_CM4F"
+    )
+else()
+    set(FREERTOS_SOURCES "")
+    set(FREERTOS_INCLUDES "")
+    message(WARNING "FreeRTOS not found at ${FREERTOS_DIR}. Build will continue without FreeRTOS.")
+endif()
+
 add_executable(${PROJECT_NAME}
     ${APP_SOURCES}
     ${HAL_SOURCES}
+    ${FREERTOS_SOURCES}
     ${STARTUP_SRC}
     ${STARTUP_ASM}
 )
@@ -78,6 +103,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     "inc"
     "${HAL_SRC_DIR}/Inc"
     "${HAL_SRC_DIR}/Inc/CMSIS_Core"
+    ${FREERTOS_INCLUDES}
 )
 
 target_link_options(${PROJECT_NAME} PRIVATE

@@ -69,6 +69,24 @@ jobs:
           echo "Legacy directory present:"
           ls lib/stm32f4_hal/Inc/Legacy/ | head -3
 
+      - name: Download FreeRTOS
+        run: |
+          FREERTOS_VERSION="V10.6.2"
+          echo "Downloading FreeRTOS ${FREERTOS_VERSION}..."
+          git clone --depth 1 --branch ${FREERTOS_VERSION} \
+            https://github.com/FreeRTOS/FreeRTOS-Kernel.git \
+            /tmp/FreeRTOS-Kernel
+          mkdir -p lib/FreeRTOS/Source/portable/GCC/ARM_CM4F
+          mkdir -p lib/FreeRTOS/Source/portable/MemMang
+          cp /tmp/FreeRTOS-Kernel/*.c lib/FreeRTOS/Source/
+          cp /tmp/FreeRTOS-Kernel/include/*.h lib/FreeRTOS/Source/include/
+          cp /tmp/FreeRTOS-Kernel/portable/GCC/ARM_CM4F/*.c lib/FreeRTOS/Source/portable/GCC/ARM_CM4F/
+          cp /tmp/FreeRTOS-Kernel/portable/GCC/ARM_CM4F/*.h lib/FreeRTOS/Source/portable/GCC/ARM_CM4F/
+          cp /tmp/FreeRTOS-Kernel/portable/MemMang/heap_4.c lib/FreeRTOS/Source/portable/MemMang/
+          rm -rf /tmp/FreeRTOS-Kernel
+          echo "FreeRTOS files:"
+          find lib/FreeRTOS -name "*.c" -o -name "*.h" | wc -l
+
       - name: Verify toolchain
         run: arm-none-eabi-gcc --version
 
