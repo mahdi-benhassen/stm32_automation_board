@@ -35,20 +35,19 @@ jobs:
       - name: Download STM32CubeF4 HAL
         run: |
           HAL_VERSION="v1.28.1"
-          mkdir -p lib/stm32f4_hal/Src lib/stm32f4_hal/Inc lib/stm32f4_hal/Inc/CMSIS_Core
+          mkdir -p lib/stm32f4_hal/Src
 
           echo "::group::Clone STM32CubeF4 (shallow)"
           git clone --depth 1 --branch ${HAL_VERSION} \
             https://github.com/STMicroelectronics/STM32CubeF4.git \
             /tmp/STM32CubeF4
           git -C /tmp/STM32CubeF4 submodule update --init --depth 1 --recommend-shallow \
-            Drivers/STM32F4xx_HAL_Driver \
-            Drivers/CMSIS
+            Drivers/STM32F4xx_HAL_Driver
           echo "::endgroup::"
 
           echo "::group::Copy HAL driver"
           cp /tmp/STM32CubeF4/Drivers/STM32F4xx_HAL_Driver/Src/*.c lib/stm32f4_hal/Src/
-          cp -r /tmp/STM32CubeF4/Drivers/STM32F4xx_HAL_Driver/Inc/* lib/stm32f4_hal/Inc/
+          cp -r /tmp/STM32CubeF4/Drivers/STM32F4xx_HAL_Driver/Inc lib/stm32f4_hal/Inc
           echo "::endgroup::"
 
           echo "::group::Copy CMSIS Device"
@@ -59,14 +58,15 @@ jobs:
           echo "::endgroup::"
 
           echo "::group::Copy CMSIS Core"
+          mkdir -p lib/stm32f4_hal/Inc/CMSIS_Core
           cp /tmp/STM32CubeF4/Drivers/CMSIS/Include/*.h lib/stm32f4_hal/Inc/CMSIS_Core/
           echo "::endgroup::"
 
           rm -rf /tmp/STM32CubeF4
-          ls -la lib/stm32f4_hal/Src/ | head -5
-          ls -la lib/stm32f4_hal/Inc/ | head -5
-          echo "HAL files count:"
+          echo "HAL files copied:"
           find lib/stm32f4_hal -name "*.c" -o -name "*.h" | wc -l
+          echo "Legacy directory present:"
+          ls lib/stm32f4_hal/Inc/Legacy/ | head -3
 
       - name: Verify toolchain
         run: arm-none-eabi-gcc --version

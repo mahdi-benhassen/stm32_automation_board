@@ -20,7 +20,7 @@ void HAL_Delay(uint32_t delay)
     }
 }
 
-static void system_clock_config(void)
+void system_clock_config(void)
 {
     RCC_OscInitTypeDef rcc_osc = {0};
     RCC_ClkInitTypeDef rcc_clk = {0};
