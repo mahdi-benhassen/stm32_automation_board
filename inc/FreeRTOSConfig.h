@@ -31,6 +31,10 @@ extern uint32_t SystemCoreClock;
 #define configUSE_TIME_SLICING                  1
 #define configUSE_NEWLIB_REENTRANT              0
 #define configUSE_TASK_NOTIFICATIONS            1
+#define configUSE_TIMERS                        1
+#define configTIMER_TASK_PRIORITY               (tskIDLE_PRIORITY + 1)
+#define configTIMER_QUEUE_LENGTH                10
+#define configTIMER_TASK_STACK_DEPTH            configMINIMAL_STACK_SIZE
 
 #define INCLUDE_vTaskDelay                       1
 #define INCLUDE_xTaskDelayUntil                  1
