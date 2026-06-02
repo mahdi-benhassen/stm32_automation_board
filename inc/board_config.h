@@ -4,6 +4,10 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#ifdef STM32F407xx
+#include "stm32f4xx_hal.h"
+#endif
+
 /* ============================================================
  * CPU Configuration
  * ============================================================ */

@@ -48,7 +48,7 @@ jobs:
 
           echo "::group::Copy HAL driver"
           cp /tmp/STM32CubeF4/Drivers/STM32F4xx_HAL_Driver/Src/*.c lib/stm32f4_hal/Src/
-          cp /tmp/STM32CubeF4/Drivers/STM32F4xx_HAL_Driver/Inc/*.h lib/stm32f4_hal/Inc/
+          cp -r /tmp/STM32CubeF4/Drivers/STM32F4xx_HAL_Driver/Inc/* lib/stm32f4_hal/Inc/
           echo "::endgroup::"
 
           echo "::group::Copy CMSIS Device"
