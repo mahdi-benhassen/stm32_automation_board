@@ -30,7 +30,7 @@ extern uint32_t SystemCoreClock;
 #define configUSE_DAEMON_TASK_STARTUP_HOOK      0
 #define configUSE_TIME_SLICING                  1
 #define configUSE_NEWLIB_REENTRANT              0
-#define configUSE_TASK_NOTIFICATIONS            2
+#define configUSE_TASK_NOTIFICATIONS            1
 
 #define configPRIO_BITS                         4        /* 15 priority levels */
 #define configLIBRARY_LOWEST_INTERRUPT_PRIORITY  0xf
