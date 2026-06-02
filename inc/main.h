@@ -17,7 +17,6 @@
 
 extern volatile uint32_t sys_tick;
 
-void SystemInit(void);
 void system_clock_config(void);
 
 #endif /* MAIN_H */

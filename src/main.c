@@ -47,51 +47,6 @@ void system_clock_config(void)
     HAL_RCC_ClockConfig(&rcc_clk, FLASH_LATENCY_5);
 }
 
-void SystemInit(void)
-{
-    /* FPU enable */
-#if (__FPU_PRESENT == 1) && (__FPU_USED == 1)
-    SCB->CPACR |= ((3UL << 10 * 2) | (3UL << 11 * 2));
-#endif
-    /* Reset RCC */
-    RCC->CR |= RCC_CR_HSION;
-    while (!(RCC->CR & RCC_CR_HSIRDY));
-
-    RCC->CFGR = 0x00000000;
-    RCC->CR &= ~(RCC_CR_HSEON | RCC_CR_CSSON | RCC_CR_PLLON);
-    RCC->PLLCFGR = 0x24003010;
-    RCC->CR &= ~RCC_CR_HSEBYP;
-    RCC->CIR = 0x00000000;
-
-    /* Configure vector table offset */
-    SCB->VTOR = FLASH_BASE | 0x0000;
-}
-
-static void rs485_modbus_rx_callback(uint8_t *data, uint16_t len)
-{
-    uint8_t response[MODBUS_RTU_FRAME_MAX];
-    uint16_t resp_len = 0;
-
-    modbus_rtu_process(data, len, response, &resp_len);
-    if (resp_len > 0) {
-        rs485_set_tx_mode();
-        for (volatile uint32_t i = 0; i < 1000; i++) { __NOP(); }
-        rs485_send(response, resp_len);
-        rs485_set_rx_mode();
-    }
-}
-
-static void eth_modbus_callback(uint8_t *data, uint16_t len)
-{
-    uint8_t response[MODBUS_TCP_MAX_ADU];
-    uint16_t resp_len = 0;
-
-    modbus_tcp_build_response(data, len, response, &resp_len);
-    if (resp_len > 0) {
-        ethernet_send(response, resp_len);
-    }
-}
-
 int main(void)
 {
     HAL_Init();
