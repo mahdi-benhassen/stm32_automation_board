@@ -17,6 +17,13 @@ static TaskHandle_t modbus_tcp_task_handle = NULL;
 static SemaphoreHandle_t rs485_tx_mutex = NULL;
 static QueueHandle_t rs485_rx_queue = NULL;
 static QueueHandle_t eth_rx_queue = NULL;
+static TimerHandle_t status_led_timer = NULL;
+
+static void status_led_timer_callback(TimerHandle_t xTimer)
+{
+    (void)xTimer;
+    HAL_GPIO_TogglePin(STATUS_LED_PORT, STATUS_LED_PIN);
+}
 
 typedef struct {
     uint8_t data[MODBUS_RTU_FRAME_MAX];
@@ -54,10 +61,11 @@ static void io_scan_task(void *pvParameters)
         digital_inputs_scan();
 
         uint16_t ai_buf[AI_COUNT];
-        analog_inputs_scan_all(ai_buf);
-        for (uint8_t i = 0; i < AI_COUNT; i++) {
-            modbus_write_holding_register(MODBUS_HOLDING_REG_OFFSET + 100 + i, ai_buf[i]);
-        }
+            analog_inputs_scan_all(ai_buf);
+            for (uint8_t i = 0; i < AI_COUNT; i++) {
+                modbus_write_holding_register(MODBUS_HOLDING_REG_OFFSET + 100 + i, ai_buf[i]);
+            }
+            modbus_sync_inputs();
 
         vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(10));
     }
@@ -176,6 +184,20 @@ int main(void)
 
     rs485_set_rx_callback(rs485_modbus_callback);
     ethernet_set_rx_callback(eth_modbus_callback);
+
+    GPIO_InitTypeDef status_led = {0};
+    STATUS_LED_CLK_ENABLE();
+    status_led.Pin  = STATUS_LED_PIN;
+    status_led.Mode = GPIO_MODE_OUTPUT_PP;
+    status_led.Pull = GPIO_NOPULL;
+    status_led.Speed = GPIO_SPEED_LOW;
+    HAL_GPIO_Init(STATUS_LED_PORT, &status_led);
+
+    status_led_timer = xTimerCreate("StatusLED", pdMS_TO_TICKS(500),
+                                     pdTRUE, NULL, status_led_timer_callback);
+    if (status_led_timer) {
+        xTimerStart(status_led_timer, 0);
+    }
 
     xTaskCreate(io_scan_task, "IO_Scan", STACK_IO_SCAN, NULL,
                 TASK_PRIO_IO_SCAN, &io_scan_task_handle);

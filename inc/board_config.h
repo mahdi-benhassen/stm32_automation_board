@@ -46,8 +46,8 @@
 #define DO_PIN_4            GPIO_PIN_8
 #define DO_PIN_5            GPIO_PIN_9
 #define DO_PIN_6            GPIO_PIN_10
-#define DO_PIN_7            GPIO_PIN_12
-#define DO_PIN_MASK         0x1763U
+#define DO_PIN_7            GPIO_PIN_14
+#define DO_PIN_MASK         0x5703U
 #define DO_COUNT            8
 
 /* ============================================================
@@ -79,7 +79,7 @@
 /* ADC resolution: 12-bit = 0..4095 */
 #define ADC_RESOLUTION      4095U
 #define ADC_REF_VOLTAGE     3.3f
-#define AI_VOLTAGE_SCALE    3.0f    /* divider ratio 1/3 -> 10V = 3.3V */
+#define AI_VOLTAGE_SCALE    (10.0f / 3.3f)  /* 10V input range via 3.3V ADC */
 
 /* ============================================================
  * Analog Outputs - 2 channels (0-1) on DAC
@@ -121,6 +121,13 @@
 #define RELAY4_LED_PIN      GPIO_PIN_3
 
 #define RELAY_COUNT         4
+
+/* ============================================================
+ * Status LED
+ * ============================================================ */
+#define STATUS_LED_PORT     GPIOC
+#define STATUS_LED_PIN      GPIO_PIN_13
+#define STATUS_LED_CLK_ENABLE() __HAL_RCC_GPIOC_CLK_ENABLE()
 
 /* ============================================================
  * RS485 Interface - USART2

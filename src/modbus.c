@@ -120,6 +120,19 @@ static void modbus_sync_registers(void)
     }
 }
 
+void modbus_sync_inputs(void)
+{
+    uint8_t di = digital_inputs_read_all();
+    for (uint8_t i = 0; i < DI_COUNT; i++) {
+        modbus_bit_write(discrete_bits, MODBUS_DISCRETE_INPUT_OFFSET + i,
+                         (di >> i) & 0x01);
+    }
+    for (uint8_t i = 0; i < AI_COUNT; i++) {
+        input_regs[MODBUS_INPUT_REG_OFFSET + i] =
+            holding_regs[MODBUS_HOLDING_REG_OFFSET + 100 + i];
+    }
+}
+
 /* ============================================================
  * Modbus RTU Frame Processing
  * ============================================================ */

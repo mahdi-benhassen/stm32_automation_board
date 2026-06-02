@@ -264,6 +264,8 @@ mbpoll -a 1 -b 115200 -t 4 -r 1 /dev/ttyUSB0 2047
 
 ### Ethernet (Modbus TCP)
 
+> **Note:** Modbus TCP frame processing (MBAP header strip/wrap) is implemented. However, a full TCP/IP stack (e.g., lwIP) must be integrated for complete ARP/IP/TCP protocol handling. Currently, Modbus communication is fully functional over RS485 (RTU). The Modbus TCP code path is ready for use once lwIP or an equivalent stack is added.
+
 | Parameter    | Value                  |
 |--------------|------------------------|
 | IP address   | 192.168.1.100 (default)|
@@ -337,7 +339,7 @@ client.close()
 | 4       | DO4      | PB8 output     | 0 = OFF, 1 = ON        |
 | 5       | DO5      | PB9 output     | 0 = OFF, 1 = ON        |
 | 6       | DO6      | PB10 output    | 0 = OFF, 1 = ON        |
-| 7       | DO7      | PB12 output    | 0 = OFF, 1 = ON        |
+| 7       | DO7      | PB14 output    | 0 = OFF, 1 = ON        |
 | 8       | RELAY1   | PC8 + PD0 LED  | 0 = OFF, 1 = ON        |
 | 9       | RELAY2   | PC9 + PD1 LED  | 0 = OFF, 1 = ON        |
 | 10      | RELAY3   | PC10 + PD2 LED | 0 = OFF, 1 = ON        |
@@ -382,7 +384,7 @@ client.close()
 
 ### How They Work
 
-Digital inputs are scanned every **10 ms** by the IO_Scan FreeRTOS task. Each input has a **5-sample software debounce** — the input must remain stable for 5 consecutive samples (50 ms) before the state changes.
+Digital inputs are scanned every **10 ms** by the IO_Scan FreeRTOS task. Each input has a **6-sample software debounce** — the input must remain stable for 6 consecutive samples (~60 ms) before the state changes.
 
 ```
 GPIOE IDR register

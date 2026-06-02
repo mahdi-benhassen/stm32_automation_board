@@ -61,4 +61,6 @@ uint16_t modbus_read_input_register(uint16_t addr);
 uint16_t modbus_read_holding_register(uint16_t addr);
 void modbus_write_holding_register(uint16_t addr, uint16_t value);
 
+void modbus_sync_inputs(void);
+
 #endif /* MODBUS_H */

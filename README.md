@@ -12,7 +12,8 @@ Industrial automation controller based on STM32F407 with Ethernet, RS485, and Mo
 - **RS485** half-duplex interface with DE/RE direction control
 - **Ethernet** 10/100M RMII with built-in MAC (external PHY: LAN8720/DP83848)
 - **Modbus RTU** (slave) over RS485
-- **Modbus TCP** (server) over Ethernet, port 502
+- **Modbus TCP** frame handling over Ethernet (requires lwIP integration for full TCP/IP stack at runtime)
+- **FreeRTOS V11** real-time OS with preemptive scheduler
 
 ## Modbus Register Map
 
@@ -149,11 +150,11 @@ The firmware runs on **FreeRTOS V11** with a preemptive scheduler at 1 kHz tick 
 
 ### Task Overview
 
-| Task          | Priority | Stack  | Period        | Description                              |
-|---------------|----------|--------|---------------|------------------------------------------|
-| `IO_Scan`     | 3 (high) | 512 B  | 10 ms         | Scans all digital and analog inputs      |
-| `ModbusRTU`   | 2 (med)  | 768 B  | event-driven  | Processes Modbus RTU frames from RS485   |
-| `ModbusTCP`   | 2 (med)  | 1024 B | event-driven  | Processes Modbus TCP frames from Ethernet|
+| Task          | Priority | Stack (words) | Stack (bytes) | Period        | Description                              |
+|---------------|----------|---------------|---------------|---------------|------------------------------------------|
+| `IO_Scan`     | 3 (high) | 512           | 2048          | 10 ms         | Scans all digital and analog inputs      |
+| `ModbusRTU`   | 2 (med)  | 768           | 3072          | event-driven  | Processes Modbus RTU frames from RS485   |
+| `ModbusTCP`   | 2 (med)  | 1024          | 4096          | event-driven  | Processes Modbus TCP frames from Ethernet|
 
 ### Task States
 
@@ -203,7 +204,7 @@ Every task transitions through FreeRTOS's standard states during its lifetime:
 vTaskDelayUntil(&xLastWakeTime, 10ms)
 ┌─────────────────────────────────────────────────┐
 │ 1. digital_inputs_scan() → reads GPIOE IDR      │
-│    with 5-sample debounce per channel            │
+│    with 6-sample debounce per channel (~60ms)    │
 │                                                  │
 │ 2. analog_inputs_scan_all() → starts ADC1,       │
 │    loops 4 channels (polling conv), stores raw   │
@@ -222,7 +223,7 @@ vTaskDelayUntil(&xLastWakeTime, 10ms)
 #### ModbusRTU — Event-Driven, Queue-Blocked
 
 ```
-xQueueReceive(rs485_rx_q, 100ms timeout)
+xQueueReceive(rs485_rx_q, 50ms timeout)
 ┌─────────────────────────────────────────────────┐
 │ 1. Blocks on queue for up to 100 ms              │
 │    Timeout → loops back (prevents tight spin)    │
@@ -250,7 +251,7 @@ The RS485 tx_mutex is critical — RS485 is half-duplex, only one device transmi
 #### ModbusTCP — Hybrid Polling + Event-Driven
 
 ```
-xQueueReceive(eth_rx_q, 100ms timeout)
+xQueueReceive(eth_rx_q, 10ms timeout)
 ┌─────────────────────────────────────────────────┐
 │ 1. ethernet_process() called EVERY loop          │
 │    iteration, not only on queue event. This      │
@@ -303,18 +304,30 @@ All three tasks share the Modbus register array without explicit locking because
 ### Data Flow & IPC
 
 ```
-┌──────────┐  ISR callback    ┌─────────────┐  xQueueReceive  ┌─────────────┐
-│  RS485   │─────────────────►│ rs485_rx_q  │───────────────►│  ModbusRTU  │
-│  USART2  │  xQueueSendFrom  │  (queue 8)  │                │    Task     │
-└──────────┘     ISR()        └─────────────┘                └──────┬──────┘
-                                                                    │
-                                                          rs485_tx_mutex
-                                                          (mutex, guards TX)
-                                                                    │
-┌──────────┐  ISR callback    ┌─────────────┐  xQueueReceive  ┌─────▼──────┐
-│ Ethernet │─────────────────►│  eth_rx_q   │───────────────►│ ModbusTCP  │
-│   MAC    │  xQueueSendFrom  │  (queue 8)  │                │    Task    │
-└──────────┘     ISR()        └─────────────┘                └────────────┘
+┌──────────┐  ISR fills     ┌──────────┐  task drains    ┌─────────────┐  xQueueSend    ┌─────────────┐
+│  RS485   │───────────────►│  ring    │────────────────►│ rs485_       │──────────────►│ rs485_rx_q  │
+│  USART2  │   rx_head++    │  buffer  │  rs485_process()│ process()    │               │  (queue 8)  │
+└──────────┘                └──────────┘                 └─────────────┘               └──────┬──────┘
+                                                                                              │
+                                                                                     xQueueReceive
+                                                                                              │
+                                                                                      ┌───────▼──────┐
+                                                                                      │  ModbusRTU   │
+                                                                                      │    Task      │
+                                                                                      └──────────────┘
+
+┌──────────┐  DMA IRQ       ┌─────────────┐  task polls     ┌─────────────┐  xQueueSend    ┌─────────────┐
+│ Ethernet │───────────────►│  ETH DMA    │────────────────►│ ethernet_    │──────────────►│  eth_rx_q   │
+│   MAC    │  ETH_IRQHandler│  descriptors│ethernet_process()│ process()   │               │  (queue 8)  │
+└──────────┘                └─────────────┘                 └─────────────┘               └──────┬──────┘
+                                                                                                 │
+                                                                                        xQueueReceive
+                                                                                                 │
+                                                                                         ┌───────▼──────┐
+                                                                                         │  ModbusTCP   │
+                                                                                         │    Task      │
+                                                                                         └──────────────┘
+```
 
 ┌──────────┐  vTaskDelayUntil(10ms)  ┌─────────────┐
 │ SysTick  │────────────────────────►│   IO_Scan   │──► Modbus registers
@@ -336,12 +349,12 @@ FreeRTOS `heap_4.c` manages a **32 KB heap** (`configTOTAL_HEAP_SIZE`). Allocati
 
 | Allocation        | Size       | Type     |
 |-------------------|------------|----------|
-| Task stacks       | ~2.3 KB    | Static   |
+| Task stacks       | ~9.2 KB    | Dynamic  |
 | Queues (2x8)      | ~4.1 KB    | Dynamic  |
 | Mutex             | ~200 B     | Dynamic  |
 | Kernel structures | ~1 KB      | Dynamic  |
 
-Heap usage is monitored via `xPortGetFreeHeapSize()` — if it drops below a threshold, `vApplicationMallocFailedHook()` traps execution.
+When FreeRTOS `pvPortMalloc()` fails to allocate memory, `vApplicationMallocFailedHook()` traps execution (infinite loop with interrupts disabled). Heap usage can be inspected at runtime via `xPortGetFreeHeapSize()`.
 
 ## License
 
