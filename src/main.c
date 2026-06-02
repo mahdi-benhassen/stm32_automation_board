@@ -1,5 +1,15 @@
 #include "main.h"
 
+uint32_t HAL_GetTick(void)
+{
+    return xTaskGetTickCount();
+}
+
+void HAL_Delay(uint32_t Delay)
+{
+    vTaskDelay(pdMS_TO_TICKS(Delay));
+}
+
 static TaskHandle_t io_scan_task_handle = NULL;
 static TaskHandle_t modbus_rtu_task_handle = NULL;
 static TaskHandle_t modbus_tcp_task_handle = NULL;
