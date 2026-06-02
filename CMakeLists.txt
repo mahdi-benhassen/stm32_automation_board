@@ -81,14 +81,17 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 )
 
 target_link_options(${PROJECT_NAME} PRIVATE
-    -T "${CMAKE_CURRENT_SOURCE_DIR}/linker/STM32F407VGTx_FLASH.ld"
-    ${MCU_FLAGS}
-    -Wl,-Map=${PROJECT_BINARY_DIR}/${PROJECT_NAME}.map
+    "SHELL:-T ${CMAKE_CURRENT_SOURCE_DIR}/linker/STM32F407VGTx_FLASH.ld"
+    -mcpu=cortex-m4
+    -mthumb
+    -mfpu=fpv4-sp-d16
+    -mfloat-abi=hard
+    "SHELL:-Wl,-Map=${PROJECT_BINARY_DIR}/${PROJECT_NAME}.map"
     -Wl,--gc-sections
     -Wl,--print-memory-usage
     -nostartfiles
-    -specs=nosys.specs
-    -specs=nano.specs
+    --specs=nosys.specs
+    --specs=nano.specs
 )
 
 add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
