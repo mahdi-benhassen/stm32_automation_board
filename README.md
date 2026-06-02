@@ -104,6 +104,45 @@ Tags starting with `v` trigger a release with firmware artifacts.
 | TXD0        | PB12 |
 | TXD1        | PB13 |
 
+## Flashing
+
+### Option 1: STM32CubeProgrammer (CLI)
+
+```bash
+# Download from https://www.st.com/en/development-tools/stm32cubeprog.html
+
+# Flash via ST-Link
+STM32_Programmer_CLI -c port=SWD -w build/stm32_automation_board.hex -v
+
+# Flash via UART (bootloader)
+STM32_Programmer_CLI -c port=COM3 br=115200 -w build/stm32_automation_board.hex -v
+```
+
+### Option 2: OpenOCD + ST-Link
+
+```bash
+# Install OpenOCD (Ubuntu/Debian)
+sudo apt-get install openocd
+
+# Connect ST-Link and flash
+openocd -f openocd.cfg -c "program build/stm32_automation_board.hex verify reset exit"
+```
+
+### Option 3: STM32 ST-LINK Utility (Windows)
+
+1. Download [ST-LINK Utility](https://www.st.com/en/development-tools/stsw-link004.html)
+2. Connect ST-Link to the board
+3. Target → Connect
+4. Target → Program & Verify → select `build/stm32_automation_board.hex`
+
+### Entering Bootloader (for UART flash)
+
+1. Set BOOT0 pin HIGH, BOOT1 pin LOW
+2. Reset the MCU
+3. Connect USART1 (PA9=TX, PA10=RX) via USB-UART adapter
+4. Flash via STM32CubeProgrammer or `stm32flash`
+5. Set BOOT0 LOW and reset to run firmware
+
 ## License
 
 MIT
