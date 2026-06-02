@@ -190,15 +190,115 @@ Every task transitions through FreeRTOS's standard states during its lifetime:
                      └──────┘
 ```
 
-**State descriptions:**
-
-- **Running** — Only one task runs at a time on the Cortex-M4. The scheduler picks the highest-priority Ready task.
+- **Running** — Only one task runs at a time. The scheduler picks the highest-priority Ready task.
 - **Ready** — Task is ready to run but a higher or equal priority task is currently Running.
-- **Blocked** — Task is waiting for an event:
-  - `IO_Scan` blocks on `vTaskDelayUntil()` for 10 ms periods
-  - `ModbusRTU` blocks on `xQueueReceive()` waiting for RS485 frames
-  - `ModbusTCP` blocks on `xQueueReceive()` waiting for Ethernet frames
-- **Suspended** — Not used in this application (only via explicit `vTaskSuspend()`).
+- **Blocked** — Task waits for an event: `IO_Scan` on `vTaskDelayUntil()`, `ModbusRTU`/`ModbusTCP` on `xQueueReceive()`.
+- **Suspended** — Not used in this application.
+
+### How Each Task Works
+
+#### IO_Scan — Periodic, Time-Driven
+
+```
+vTaskDelayUntil(&xLastWakeTime, 10ms)
+┌─────────────────────────────────────────────────┐
+│ 1. digital_inputs_scan() → reads GPIOE IDR      │
+│    with 5-sample debounce per channel            │
+│                                                  │
+│ 2. analog_inputs_scan_all() → starts ADC1,       │
+│    loops 4 channels (polling conv), stores raw   │
+│                                                  │
+│ 3. modbus_write_holding_register(100+i, raw)     │
+│    copies ADC values to Modbus holding regs      │
+│    100-103 for external read access              │
+│                                                  │
+│ 4. vTaskDelayUntil() blocks for exactly 10ms     │
+│    (not 10ms from unblock — fixed 100 Hz rate)   │
+└─────────────────────────────────────────────────┘
+```
+
+`vTaskDelayUntil()` ensures a fixed 100 Hz scan rate regardless of processing jitter. If the scan takes 2 ms, it sleeps 8 ms. If it takes 0.5 ms, it sleeps 9.5 ms. The period does not drift.
+
+#### ModbusRTU — Event-Driven, Queue-Blocked
+
+```
+xQueueReceive(rs485_rx_q, 100ms timeout)
+┌─────────────────────────────────────────────────┐
+│ 1. Blocks on queue for up to 100 ms              │
+│    Timeout → loops back (prevents tight spin)    │
+│                                                  │
+│ 2. On frame arrival:                             │
+│    modbus_rtu_process(frame, response) → CRC     │
+│    check, function code dispatch, read/write     │
+│    coils/registers, build response               │
+│                                                  │
+│ 3. If response built (resp_len > 0):             │
+│    xSemaphoreTake(rs485_tx_mutex, 50ms)          │
+│    ├─ acquired: rs485_set_tx_mode()              │
+│    │            1000 NOPs (PHY settle)            │
+│    │            rs485_send(response)              │
+│    │            rs485_set_rx_mode()               │
+│    │            xSemaphoreGive(mutex)             │
+│    └─ timeout: drops response (bus busy)         │
+│                                                  │
+│ 4. Loops back to queue receive                   │
+└─────────────────────────────────────────────────┘
+```
+
+The RS485 tx_mutex is critical — RS485 is half-duplex, only one device transmits at a time. The 1000-NOP delay after switching the DE pin allows the transceiver to stabilize (~1-5 µs). Response is silently dropped if TX is busy (50 ms timeout), preventing queue buildup.
+
+#### ModbusTCP — Hybrid Polling + Event-Driven
+
+```
+xQueueReceive(eth_rx_q, 100ms timeout)
+┌─────────────────────────────────────────────────┐
+│ 1. ethernet_process() called EVERY loop          │
+│    iteration, not only on queue event. This      │
+│    drains ETH DMA for received frames.           │
+│                                                  │
+│    Why poll? ETH IRQ fires once per packet       │
+│    burst, not per individual frame. Polling      │
+│    ensures the DMA ring is fully drained.        │
+│                                                  │
+│ 2. xQueueReceive(100ms) — blocks until a         │
+│    frame arrives or timeout                      │
+│                                                  │
+│ 3. On frame: modbus_tcp_build_response() →       │
+│    strips MBAP header, delegates to RTU engine,  │
+│    wraps response with same transaction ID       │
+│                                                  │
+│ 4. ethernet_send(response) → configures          │
+│    ETH_TxPacketConfig, calls HAL_ETH_Transmit    │
+│                                                  │
+│ 5. Loops back                                    │
+└─────────────────────────────────────────────────┘
+```
+
+Ethernet RX uses a dual-path mechanism — `ethernet_process()` polls the DMA ring and pushes frames into the queue via the ISR callback, while `xQueueReceive()` dequeues and processes them in task context. This decouples DMA timing (interrupt context) from Modbus processing (task context).
+
+### Inter-Task Data Flow
+
+```
+IO_Scan (periodic)           ModbusRTU (event)         ModbusTCP (event)
+     │                            │                         │
+     │ writes regs 100-103        │ reads regs on           │
+     ├───────────────────────────►│ FC 03/04 request        │
+     │                            │                         │
+     │ reads DO states            │ writes DO coils on      │
+     │◄───────────────────────────┤ FC 05/0F                │
+     │                            │                         │
+     │                            │                         │ reads regs / writes
+     │                            │                         │ coils on TCP requests
+     │ reads/writes shared        │                         │
+     │ Modbus registers           │                         │
+     │◄───────────────────────────┼────────────────────────►│
+     │                            │                         │
+     ▼                            ▼                         ▼
+  Modbus register array (shared memory, no lock needed —
+  uint16_t reads/writes are atomic on Cortex-M4)
+```
+
+All three tasks share the Modbus register array without explicit locking because `uint16_t` reads/writes are atomic on ARM Cortex-M4 (single aligned 16-bit store instruction). The IO_Scan task only writes to holding registers 100-103 (AI mirrors), never reads from them — ModbusRTU and ModbusTCP only read from these locations. For coils and DO registers, task writes are mediated through dedicated `modbus_bit_write()` and `modbus_regs_write()` functions, with hardware sync deferred to `modbus_sync_registers()` inside each task's request handler.
 
 ### Data Flow & IPC
 
@@ -222,13 +322,11 @@ Every task transitions through FreeRTOS's standard states during its lifetime:
 └──────────┘                         └─────────────┘
 ```
 
-**Key IPC primitives:**
-
-| Mechanism       | Type  | Purpose                                           |
-|-----------------|-------|---------------------------------------------------|
-| `rs485_rx_q`   | Queue | Passes raw RS485 frames from ISR to ModbusRTU task|
-| `eth_rx_q`     | Queue | Passes raw Ethernet frames from ISR to ModbusTCP task|
-| `rs485_tx_mutex`| Mutex | Prevents concurrent RS485 TX (half-duplex bus)     |
+| Mechanism        | Type  | Purpose                                           |
+|------------------|-------|---------------------------------------------------|
+| `rs485_rx_q`    | Queue | Passes raw RS485 frames from ISR to ModbusRTU task|
+| `eth_rx_q`      | Queue | Passes raw Ethernet frames from ISR to ModbusTCP task|
+| `rs485_tx_mutex` | Mutex | Prevents concurrent RS485 TX (half-duplex bus)     |
 
 **Why queues from ISR?** The RS485 and Ethernet RX callbacks execute in interrupt context. `xQueueSendFromISR()` is the only FreeRTOS API safe to call from ISRs. The task-level `xQueueReceive()` then picks up the frame in thread mode where blocking is allowed.
 
@@ -236,12 +334,12 @@ Every task transitions through FreeRTOS's standard states during its lifetime:
 
 FreeRTOS `heap_4.c` manages a **32 KB heap** (`configTOTAL_HEAP_SIZE`). Allocations use a first-fit algorithm with coalescing of adjacent free blocks.
 
-| Allocation       | Size       | Type     |
-|------------------|------------|----------|
-| Task stacks      | ~2.3 KB    | Static   |
-| Queues (2x8)     | ~4.1 KB    | Dynamic  |
-| Mutex            | ~200 B     | Dynamic  |
-| Kernel structures| ~1 KB      | Dynamic  |
+| Allocation        | Size       | Type     |
+|-------------------|------------|----------|
+| Task stacks       | ~2.3 KB    | Static   |
+| Queues (2x8)      | ~4.1 KB    | Dynamic  |
+| Mutex             | ~200 B     | Dynamic  |
+| Kernel structures | ~1 KB      | Dynamic  |
 
 Heap usage is monitored via `xPortGetFreeHeapSize()` — if it drops below a threshold, `vApplicationMallocFailedHook()` traps execution.
 
