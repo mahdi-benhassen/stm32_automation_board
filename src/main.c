@@ -110,7 +110,7 @@ void vApplicationMallocFailedHook(void)
     for (;;) { __NOP(); }
 }
 
-void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
+void vApplicationStackOverflowHook(void *xTask, char *pcTaskName)
 {
     (void)xTask;
     (void)pcTaskName;
