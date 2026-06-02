@@ -143,6 +143,108 @@ openocd -f openocd.cfg -c "program build/stm32_automation_board.hex verify reset
 4. Flash via STM32CubeProgrammer or `stm32flash`
 5. Set BOOT0 LOW and reset to run firmware
 
+## RTOS Task Architecture
+
+The firmware runs on **FreeRTOS V11** with a preemptive scheduler at 1 kHz tick rate. The application is split into three tasks, each responsible for a specific subsystem.
+
+### Task Overview
+
+| Task          | Priority | Stack  | Period        | Description                              |
+|---------------|----------|--------|---------------|------------------------------------------|
+| `IO_Scan`     | 3 (high) | 512 B  | 10 ms         | Scans all digital and analog inputs      |
+| `ModbusRTU`   | 2 (med)  | 768 B  | event-driven  | Processes Modbus RTU frames from RS485   |
+| `ModbusTCP`   | 2 (med)  | 1024 B | event-driven  | Processes Modbus TCP frames from Ethernet|
+
+### Task States
+
+Every task transitions through FreeRTOS's standard states during its lifetime:
+
+```
+                    ┌─────────┐
+          vTaskCreate│         │
+         ───────────►│  Ready  │◄─────────────┐
+                    │         │               │
+                    └────┬────┘               │
+                         │                    │
+              Scheduler │ picks              │ Yield / Preempt
+                         │                    │
+                    ┌────▼────┐               │
+                    │ Running │───────────────┘
+                    └────┬────┘
+                         │
+           ┌─────────────┼──────────────┐
+           │             │              │
+    vTaskDelay()  xQueueReceive()  xSemaphoreTake()
+    (IO_Scan)     (ModbusRTU/TCP)  (RS485 TX mutex)
+           │             │              │
+     ┌─────▼─────┐ ┌────▼─────┐ ┌─────▼──────┐
+     │  Blocked  │ │ Blocked  │ │  Blocked   │
+     │ (timeout) │ │(queue rx)│ │ (mutex)    │
+     └─────┬─────┘ └────┬─────┘ └─────┬──────┘
+           │             │              │
+           └─────────────┼──────────────┘
+                         │ timeout / event / mutex acquired
+                         ▼
+                     ┌──────┐
+                     │Ready │  (returns to scheduler queue)
+                     └──────┘
+```
+
+**State descriptions:**
+
+- **Running** — Only one task runs at a time on the Cortex-M4. The scheduler picks the highest-priority Ready task.
+- **Ready** — Task is ready to run but a higher or equal priority task is currently Running.
+- **Blocked** — Task is waiting for an event:
+  - `IO_Scan` blocks on `vTaskDelayUntil()` for 10 ms periods
+  - `ModbusRTU` blocks on `xQueueReceive()` waiting for RS485 frames
+  - `ModbusTCP` blocks on `xQueueReceive()` waiting for Ethernet frames
+- **Suspended** — Not used in this application (only via explicit `vTaskSuspend()`).
+
+### Data Flow & IPC
+
+```
+┌──────────┐  ISR callback    ┌─────────────┐  xQueueReceive  ┌─────────────┐
+│  RS485   │─────────────────►│ rs485_rx_q  │───────────────►│  ModbusRTU  │
+│  USART2  │  xQueueSendFrom  │  (queue 8)  │                │    Task     │
+└──────────┘     ISR()        └─────────────┘                └──────┬──────┘
+                                                                    │
+                                                          rs485_tx_mutex
+                                                          (mutex, guards TX)
+                                                                    │
+┌──────────┐  ISR callback    ┌─────────────┐  xQueueReceive  ┌─────▼──────┐
+│ Ethernet │─────────────────►│  eth_rx_q   │───────────────►│ ModbusTCP  │
+│   MAC    │  xQueueSendFrom  │  (queue 8)  │                │    Task    │
+└──────────┘     ISR()        └─────────────┘                └────────────┘
+
+┌──────────┐  vTaskDelayUntil(10ms)  ┌─────────────┐
+│ SysTick  │────────────────────────►│   IO_Scan   │──► Modbus registers
+│  1 kHz   │                         │    Task     │    (holding regs 100-103)
+└──────────┘                         └─────────────┘
+```
+
+**Key IPC primitives:**
+
+| Mechanism       | Type  | Purpose                                           |
+|-----------------|-------|---------------------------------------------------|
+| `rs485_rx_q`   | Queue | Passes raw RS485 frames from ISR to ModbusRTU task|
+| `eth_rx_q`     | Queue | Passes raw Ethernet frames from ISR to ModbusTCP task|
+| `rs485_tx_mutex`| Mutex | Prevents concurrent RS485 TX (half-duplex bus)     |
+
+**Why queues from ISR?** The RS485 and Ethernet RX callbacks execute in interrupt context. `xQueueSendFromISR()` is the only FreeRTOS API safe to call from ISRs. The task-level `xQueueReceive()` then picks up the frame in thread mode where blocking is allowed.
+
+### Memory Management
+
+FreeRTOS `heap_4.c` manages a **32 KB heap** (`configTOTAL_HEAP_SIZE`). Allocations use a first-fit algorithm with coalescing of adjacent free blocks.
+
+| Allocation       | Size       | Type     |
+|------------------|------------|----------|
+| Task stacks      | ~2.3 KB    | Static   |
+| Queues (2x8)     | ~4.1 KB    | Dynamic  |
+| Mutex            | ~200 B     | Dynamic  |
+| Kernel structures| ~1 KB      | Dynamic  |
+
+Heap usage is monitored via `xPortGetFreeHeapSize()` — if it drops below a threshold, `vApplicationMallocFailedHook()` traps execution.
+
 ## License
 
 MIT
