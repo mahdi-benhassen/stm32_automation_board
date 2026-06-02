@@ -31,9 +31,9 @@ modbus_status_t modbus_tcp_build_response(uint8_t *rx_adu, uint16_t rx_len,
     if (rx_len < MODBUS_TCP_MBAP_SIZE + 2) return MODBUS_ERROR;
 
     uint16_t transaction_id = mb_tcp_get_uint16(rx_adu, 0);
-    uint16_t protocol_id    = mb_tcp_get_uint16(rx_adu, 2);
     uint16_t length         = mb_tcp_get_uint16(rx_adu, 4);
     uint8_t  unit_id        = rx_adu[6];
+    (void)mb_tcp_get_uint16(rx_adu, 2); /* protocol_id, always 0 for Modbus */
 
     if (unit_id != tcp_unit_id && unit_id != 0) {
         return MODBUS_OK; /* Not for us */

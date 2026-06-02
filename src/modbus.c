@@ -121,13 +121,6 @@ static void modbus_sync_registers(void)
     }
 }
 
-static void modbus_copy_regs(uint16_t *dest, uint16_t src_addr, uint16_t count)
-{
-    for (uint16_t i = 0; i < count; i++) {
-        dest[i] = (src_addr + i < MODBUS_MAX_REGISTERS) ? holding_regs[src_addr + i] : 0;
-    }
-}
-
 /* ============================================================
  * Modbus RTU Frame Processing
  * ============================================================ */
@@ -238,7 +231,7 @@ modbus_status_t modbus_rtu_process(uint8_t *rx_buf, uint16_t rx_len,
             resp_len   = 3;
             break;
         }
-        uint8_t byte_count = rx_buf[6];
+        (void)rx_buf[6]; /* byte_count validated by quantity check above */
         for (uint16_t i = 0; i < quantity; i++) {
             uint8_t val = (rx_buf[7 + i / 8] >> (i % 8)) & 0x01;
             modbus_bit_write(coil_bits, MODBUS_COIL_OFFSET + start_addr + i, val);
@@ -258,7 +251,7 @@ modbus_status_t modbus_rtu_process(uint8_t *rx_buf, uint16_t rx_len,
             resp_len   = 3;
             break;
         }
-        uint8_t byte_count = rx_buf[6];
+        (void)rx_buf[6]; /* byte_count validated by quantity check above */
         for (uint16_t i = 0; i < quantity; i++) {
             uint16_t val = ((uint16_t)rx_buf[7 + i * 2] << 8) | rx_buf[7 + i * 2 + 1];
             modbus_regs_write(holding_regs, MODBUS_HOLDING_REG_OFFSET + start_addr + i, val);
