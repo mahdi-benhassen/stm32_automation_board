@@ -55,10 +55,6 @@ extern uint32_t SystemCoreClock;
 #define xPortPendSVHandler       PendSV_Handler
 #define xPortSysTickHandler      SysTick_Handler
 
-void vApplicationMallocFailedHook(void);
-void vApplicationStackOverflowHook(void *xTask, char *pcTaskName);
-void vApplicationIdleHook(void);
-
 #ifdef __cplusplus
 }
 #endif
