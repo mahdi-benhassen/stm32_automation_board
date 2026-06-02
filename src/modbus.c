@@ -107,11 +107,10 @@ static void modbus_sync_registers(void)
                          (di >> i) & 0x01);
     }
 
-    /* Analog inputs -> Input registers 0-3 */
-    uint16_t ai_buf[AI_COUNT];
-    analog_inputs_scan_all(ai_buf);
+    /* Analog inputs -> Input registers 0-3 (mirror from IO_Scan task) */
     for (uint8_t i = 0; i < AI_COUNT; i++) {
-        input_regs[MODBUS_INPUT_REG_OFFSET + i] = ai_buf[i];
+        input_regs[MODBUS_INPUT_REG_OFFSET + i] =
+            holding_regs[MODBUS_HOLDING_REG_OFFSET + 100 + i];
     }
 
     /* Analog outputs -> Holding registers 0-1 */
@@ -203,6 +202,12 @@ modbus_status_t modbus_rtu_process(uint8_t *rx_buf, uint16_t rx_len,
         break;
     }
     case MODBUS_FC_WRITE_SINGLE_COIL: {
+        if (quantity != 0xFF00 && quantity != 0x0000) {
+            tx_buf[1] |= 0x80;
+            tx_buf[2]  = MODBUS_EXC_ILLEGAL_DATA_VALUE;
+            resp_len   = 3;
+            break;
+        }
         uint16_t coil_val = (quantity == 0xFF00) ? 1 : 0;
         modbus_bit_write(coil_bits, MODBUS_COIL_OFFSET + start_addr, coil_val);
         modbus_sync_registers();
@@ -231,7 +236,14 @@ modbus_status_t modbus_rtu_process(uint8_t *rx_buf, uint16_t rx_len,
             resp_len   = 3;
             break;
         }
-        (void)rx_buf[6]; /* byte_count validated by quantity check above */
+        uint8_t byte_count = rx_buf[6];
+        uint8_t expected_bytes = (uint8_t)((quantity + 7) / 8);
+        if (byte_count != expected_bytes) {
+            tx_buf[1] |= 0x80;
+            tx_buf[2]  = MODBUS_EXC_ILLEGAL_DATA_VALUE;
+            resp_len   = 3;
+            break;
+        }
         for (uint16_t i = 0; i < quantity; i++) {
             uint8_t val = (rx_buf[7 + i / 8] >> (i % 8)) & 0x01;
             modbus_bit_write(coil_bits, MODBUS_COIL_OFFSET + start_addr + i, val);
@@ -251,7 +263,13 @@ modbus_status_t modbus_rtu_process(uint8_t *rx_buf, uint16_t rx_len,
             resp_len   = 3;
             break;
         }
-        (void)rx_buf[6]; /* byte_count validated by quantity check above */
+        uint8_t byte_count = rx_buf[6];
+        if (byte_count != quantity * 2) {
+            tx_buf[1] |= 0x80;
+            tx_buf[2]  = MODBUS_EXC_ILLEGAL_DATA_VALUE;
+            resp_len   = 3;
+            break;
+        }
         for (uint16_t i = 0; i < quantity; i++) {
             uint16_t val = ((uint16_t)rx_buf[7 + i * 2] << 8) | rx_buf[7 + i * 2 + 1];
             modbus_regs_write(holding_regs, MODBUS_HOLDING_REG_OFFSET + start_addr + i, val);

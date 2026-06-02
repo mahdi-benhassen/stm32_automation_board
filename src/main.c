@@ -31,7 +31,7 @@ static void rs485_modbus_callback(uint8_t *data, uint16_t len)
         frame.data[i] = data[i];
     }
     frame.len = len;
-    xQueueSendFromISR(rs485_rx_queue, &frame, NULL);
+    xQueueSend(rs485_rx_queue, &frame, 0);
 }
 
 static void eth_modbus_callback(uint8_t *data, uint16_t len)
@@ -42,7 +42,7 @@ static void eth_modbus_callback(uint8_t *data, uint16_t len)
         frame.data[i] = data[i];
     }
     frame.len = len;
-    xQueueSendFromISR(eth_rx_queue, &frame, NULL);
+    xQueueSend(eth_rx_queue, &frame, 0);
 }
 
 static void io_scan_task(void *pvParameters)
@@ -71,7 +71,8 @@ static void modbus_rtu_task(void *pvParameters)
     uint16_t resp_len;
 
     for (;;) {
-        if (xQueueReceive(rs485_rx_queue, &rx_frame, pdMS_TO_TICKS(100)) == pdTRUE) {
+        rs485_process();
+        if (xQueueReceive(rs485_rx_queue, &rx_frame, pdMS_TO_TICKS(50)) == pdTRUE) {
             modbus_rtu_process(rx_frame.data, rx_frame.len, response, &resp_len);
             if (resp_len > 0) {
                 if (xSemaphoreTake(rs485_tx_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
@@ -95,7 +96,7 @@ static void modbus_tcp_task(void *pvParameters)
 
     for (;;) {
         ethernet_process();
-        if (xQueueReceive(eth_rx_queue, &rx_frame, pdMS_TO_TICKS(100)) == pdTRUE) {
+        if (xQueueReceive(eth_rx_queue, &rx_frame, pdMS_TO_TICKS(10)) == pdTRUE) {
             modbus_tcp_build_response(rx_frame.data, rx_frame.len, response, &resp_len);
             if (resp_len > 0) {
                 ethernet_send(response, resp_len);
@@ -167,6 +168,11 @@ int main(void)
     rs485_tx_mutex = xSemaphoreCreateMutex();
     rs485_rx_queue = xQueueCreate(8, sizeof(modbus_frame_t));
     eth_rx_queue   = xQueueCreate(8, sizeof(modbus_frame_t));
+
+    if (!rs485_tx_mutex || !rs485_rx_queue || !eth_rx_queue) {
+        __disable_irq();
+        for (;;) { __NOP(); }
+    }
 
     rs485_set_rx_callback(rs485_modbus_callback);
     ethernet_set_rx_callback(eth_modbus_callback);

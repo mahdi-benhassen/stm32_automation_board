@@ -57,15 +57,19 @@ modbus_status_t modbus_tcp_build_response(uint8_t *rx_adu, uint16_t rx_len,
                                                  rtu_response, &rtu_resp_len);
     if (status != MODBUS_OK) return status;
 
+    /* rtu_response layout: [slave_id(1)][func_code(1)][data...][CRC_lo(1)][CRC_hi(1)]
+     * TCP PDU strips slave_id and CRC; MBAP length = 1 (unit_id) + PDU length */
+    uint16_t pdu_len = (rtu_resp_len >= 3) ? (rtu_resp_len - 3) : 0;
+    if (pdu_len == 0) return MODBUS_ERROR;
+
     mb_tcp_set_uint16(tx_adu, 0, transaction_id);
     mb_tcp_set_uint16(tx_adu, 2, 0x0000); /* Protocol ID = Modbus */
-    uint16_t resp_length = rtu_resp_len;
-    mb_tcp_set_uint16(tx_adu, 4, resp_length);
+    mb_tcp_set_uint16(tx_adu, 4, 1 + pdu_len); /* unit_id + PDU */
     tx_adu[6] = unit_id;
 
-    for (uint16_t i = 0; i < resp_length; i++) {
-        tx_adu[MODBUS_TCP_MBAP_SIZE + i] = rtu_response[i];
+    for (uint16_t i = 0; i < pdu_len; i++) {
+        tx_adu[MODBUS_TCP_MBAP_SIZE + i] = rtu_response[1 + i]; /* skip slave_id */
     }
-    *tx_len = MODBUS_TCP_MBAP_SIZE + resp_length;
+    *tx_len = MODBUS_TCP_MBAP_SIZE + pdu_len;
     return MODBUS_OK;
 }
