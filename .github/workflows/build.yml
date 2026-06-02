@@ -71,11 +71,12 @@ jobs:
 
       - name: Download FreeRTOS
         run: |
-          FREERTOS_VERSION="V10.6.2"
+          FREERTOS_VERSION="V11.1.0"
           echo "Downloading FreeRTOS ${FREERTOS_VERSION}..."
           git clone --depth 1 --branch ${FREERTOS_VERSION} \
             https://github.com/FreeRTOS/FreeRTOS-Kernel.git \
             /tmp/FreeRTOS-Kernel
+          mkdir -p lib/FreeRTOS/Source/include
           mkdir -p lib/FreeRTOS/Source/portable/GCC/ARM_CM4F
           mkdir -p lib/FreeRTOS/Source/portable/MemMang
           cp /tmp/FreeRTOS-Kernel/*.c lib/FreeRTOS/Source/
