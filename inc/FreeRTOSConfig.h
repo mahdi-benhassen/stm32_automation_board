@@ -32,6 +32,12 @@ extern uint32_t SystemCoreClock;
 #define configUSE_NEWLIB_REENTRANT              0
 #define configUSE_TASK_NOTIFICATIONS            1
 
+#define INCLUDE_vTaskDelay                       1
+#define INCLUDE_xTaskDelayUntil                  1
+#define INCLUDE_vTaskDelete                      1
+#define INCLUDE_xTaskGetCurrentTaskHandle        1
+#define INCLUDE_uxTaskGetStackHighWaterMark      0
+
 #define configPRIO_BITS                         4        /* 15 priority levels */
 #define configLIBRARY_LOWEST_INTERRUPT_PRIORITY  0xf
 #define configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY  5

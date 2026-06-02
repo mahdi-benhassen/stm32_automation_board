@@ -118,6 +118,33 @@ void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
     for (;;) { __NOP(); }
 }
 
+void system_clock_config(void)
+{
+    RCC_OscInitTypeDef rcc_osc = {0};
+    RCC_ClkInitTypeDef rcc_clk = {0};
+
+    __HAL_RCC_PWR_CLK_ENABLE();
+    __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
+
+    rcc_osc.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+    rcc_osc.HSEState       = RCC_HSE_ON;
+    rcc_osc.PLL.PLLState   = RCC_PLL_ON;
+    rcc_osc.PLL.PLLSource  = RCC_PLLSOURCE_HSE;
+    rcc_osc.PLL.PLLM       = 8;
+    rcc_osc.PLL.PLLN       = 336;
+    rcc_osc.PLL.PLLP       = RCC_PLLP_DIV2;
+    rcc_osc.PLL.PLLQ       = 7;
+    HAL_RCC_OscConfig(&rcc_osc);
+
+    rcc_clk.ClockType      = (RCC_CLOCKTYPE_SYSCLK | RCC_CLOCKTYPE_HCLK |
+                              RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2);
+    rcc_clk.SYSCLKSource   = RCC_SYSCLKSOURCE_PLLCLK;
+    rcc_clk.AHBCLKDivider  = RCC_SYSCLK_DIV1;
+    rcc_clk.APB1CLKDivider = RCC_HCLK_DIV4;
+    rcc_clk.APB2CLKDivider = RCC_HCLK_DIV2;
+    HAL_RCC_ClockConfig(&rcc_clk, FLASH_LATENCY_5);
+}
+
 int main(void)
 {
     HAL_Init();
