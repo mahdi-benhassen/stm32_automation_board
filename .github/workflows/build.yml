@@ -2,7 +2,7 @@ name: STM32 Automation Board - Build
 
 on:
   push:
-    branches: [main, master, develop]
+    branches: [main, master, develop, 'feature/**']
     tags: ['v*']
   pull_request:
     branches: [main, master]
