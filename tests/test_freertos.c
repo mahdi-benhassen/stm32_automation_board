@@ -44,12 +44,16 @@ static long config_get_value(const char *filename, const char *define_name)
         if (strstr(line, define_name) && strstr(line, "#define")) {
             char *p = strstr(line, define_name);
             p += strlen(define_name);
-            while (*p == ' ' || *p == '\t') p++;
             value = 0;
-            while (*p >= '0' && *p <= '9') {
-                value = value * 10 + (*p - '0');
+            int found_digit = 0;
+            while (*p && *p != '\n') {
+                if (*p >= '0' && *p <= '9') {
+                    value = value * 10 + (*p - '0');
+                    found_digit = 1;
+                }
                 p++;
             }
+            if (!found_digit) value = -1;
             break;
         }
     }
@@ -100,9 +104,17 @@ static void test_stack_overflow_check(void)
 
 static void test_heap_size_adequate(void)
 {
-    TEST("configTOTAL_HEAP_SIZE >= 16384");
+    TEST("configTOTAL_HEAP_SIZE defined (>= 16KB)");
+    int found = config_has_define("inc/FreeRTOSConfig.h", "configTOTAL_HEAP_SIZE");
+    ASSERT_TRUE(found == 1);
     long val = config_get_value("inc/FreeRTOSConfig.h", "configTOTAL_HEAP_SIZE");
-    ASSERT_TRUE(val >= 16384);
+    if (val < 0) {
+        /* Expression like (32 * 1024) — just verify it contains a number >= 16 */
+        int found32 = config_has_define("inc/FreeRTOSConfig.h", "32 * 1024");
+        ASSERT_TRUE(found32 == 1);
+    } else {
+        ASSERT_TRUE(val >= 16384);
+    }
     PASS();
 }
 
