@@ -10,7 +10,11 @@
 | 4 | No compiler warnings (excluding HAL) | PASS | `-Wall -Wextra` enabled |
 | 5 | Linker succeeds with memory report | PASS | FLASH 3.3%, RAM 44.8% |
 | 6 | `.hex` and `.bin` artifacts generated | PASS | CI uploads artifacts |
-| 7 | `cppcheck` static analysis | PASS | Lint job in CI |
+| 7 | `cppcheck` static analysis | PASS | Lint job in CI with `--error-exitcode=1` |
+| 8 | Modbus unit tests (CRC, quantity, buffer) | PASS | 20 native tests in CI |
+| 9 | FreeRTOS config validation tests | PASS | 11 native tests in CI |
+| 10 | Linker script validation tests | PASS | 7 native tests in CI |
+| 11 | Firmware size guard (<80% flash) | PASS | CI rejects oversized builds |
 
 ## Safety Features
 
@@ -45,6 +49,7 @@
 | 14 | UART 8E1 framing (11-bit char) | PASS | `UART_WORDLENGTH_9B` + `UART_PARITY_EVEN` |
 | 15 | PDU/CRC separation for TCP | PASS | `modbus_pdu_process()` called directly by TCP |
 | 16 | Mutex protects shared registers | PASS | `modbus_mutex` wraps all PDU processing |
+| 17 | 3.5-char frame detection | PASS | UART IDLE interrupt + timestamp-based timeout in `rs485_process()` |
 
 ## Security
 
@@ -89,7 +94,7 @@
 | # | Limitation | Impact | Mitigation |
 |---|-----------|--------|------------|
 | 1 | No TCP/IP stack (lwIP) | Modbus TCP non-functional over Ethernet | Integrate lwIP for ARP/IP/TCP |
-| 2 | No 3.5-char frame detection on RS485 | Unreliable frame boundary detection under noise | Implement UART IDLE interrupt + timer |
+| 2 | ~~No 3.5-char frame detection on RS485~~ | **FIXED** | Implemented UART IDLE + timestamp timeout |
 | 3 | No configuration persistence (NVRAM) | Settings lost on power cycle | Add I2C/flash-based parameter storage |
 | 4 | No firmware bootloader | No field updates without SWD | Implement UART or Ethernet bootloader |
 | 5 | No versioning/fingerprinting | Cannot identify firmware version in field | Add version string in flash + Modbus register |

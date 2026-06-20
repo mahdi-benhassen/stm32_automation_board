@@ -6,6 +6,10 @@ static volatile uint16_t rx_head = 0;
 static volatile uint16_t rx_tail = 0;
 static rs485_rx_callback_t rx_callback = NULL;
 
+static volatile uint32_t last_rx_tick = 0;
+static volatile uint8_t  rx_active = 0;
+static uint32_t frame_timeout_us = 0;
+
 void rs485_init(uint32_t baudrate)
 {
     RS485_GPIO_CLK_ENABLE();
@@ -40,8 +44,15 @@ void rs485_init(uint32_t baudrate)
 
     rx_head = 0;
     rx_tail = 0;
+    rx_active = 0;
+
+    /* 3.5 char times in ms: 11 bits/char / baud * 3.5, minimum 2ms */
+    uint32_t char_time_us = (11UL * 1000000UL) / baudrate;
+    frame_timeout_us = char_time_us * 4;
+    if (frame_timeout_us < 2000) frame_timeout_us = 2000;
 
     __HAL_UART_ENABLE_IT(&huart_rs485, UART_IT_RXNE);
+    __HAL_UART_ENABLE_IT(&huart_rs485, UART_IT_IDLE);
     HAL_NVIC_SetPriority(USART2_IRQn, 1, 0);
     HAL_NVIC_EnableIRQ(USART2_IRQn);
 }
@@ -98,6 +109,7 @@ void rs485_flush_rx(void)
     __disable_irq();
     rx_head = 0;
     rx_tail = 0;
+    rx_active = 0;
     __enable_irq();
 }
 
@@ -108,10 +120,24 @@ void rs485_set_rx_callback(rs485_rx_callback_t callback)
 
 void rs485_process(void)
 {
-    if (rx_callback && rs485_bytes_available() >= 8) {
+    if (!rx_callback || !rx_active) return;
+
+    uint32_t now = HAL_GetTick();
+    uint32_t elapsed;
+    if (now >= last_rx_tick) {
+        elapsed = now - last_rx_tick;
+    } else {
+        elapsed = (0xFFFFFFFF - last_rx_tick) + now;
+    }
+
+    uint32_t timeout_ms = frame_timeout_us / 1000;
+    if (timeout_ms < 1) timeout_ms = 1;
+
+    if (elapsed >= timeout_ms && rs485_bytes_available() > 0) {
         uint8_t tmp[RS485_BUFFER_SIZE];
         uint16_t len = rs485_read(tmp, RS485_BUFFER_SIZE);
         if (len > 0) {
+            rx_active = 0;
             rx_callback(tmp, len);
         }
     }
@@ -126,6 +152,13 @@ void USART2_IRQHandler(void)
             rx_buffer[rx_head] = byte;
             rx_head = next_head;
         }
+        last_rx_tick = HAL_GetTick();
+        rx_active = 1;
     }
+
+    if (__HAL_UART_GET_FLAG(&huart_rs485, UART_FLAG_IDLE)) {
+        __HAL_UART_CLEAR_IDLEFLAG(&huart_rs485);
+    }
+
     HAL_UART_IRQHandler(&huart_rs485);
 }

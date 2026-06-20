@@ -128,8 +128,64 @@ jobs:
           sudo apt-get install -y -qq cppcheck
           cppcheck --enable=all --inconclusive --suppress=missingIncludeSystem \
             --template='{file}:{line}: {severity}: {message} [{id}]' \
-            --error-exitcode=0 \
+            --error-exitcode=1 \
             -I inc src/
+
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build and run Modbus protocol tests
+        run: |
+          gcc -std=c11 -Wall -Wextra -o test_modbus tests/test_modbus.c tests/modbus_crc_standalone.c -Itests
+          ./test_modbus
+
+      - name: Build and run FreeRTOS config validation tests
+        run: |
+          gcc -std=c11 -Wall -Wextra -o test_freertos tests/test_freertos.c -Iinc
+          ./test_freertos
+
+      - name: Build and run linker script validation tests
+        run: |
+          gcc -std=c11 -Wall -Wextra -o test_linker tests/test_linker.c
+          ./test_linker
+
+  firmware-size-guard:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download firmware artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: firmware-Release
+
+      - name: Check firmware size < 80% of flash
+        run: |
+          MAX_FLASH=$((1024 * 1024))
+          THRESHOLD=$((MAX_FLASH * 80 / 100))
+          ACTUAL=$(stat -c%s stm32_automation_board.bin 2>/dev/null || stat -f%z stm32_automation_board.bin)
+          echo "Firmware size: ${ACTUAL} bytes (max: ${MAX_FLASH}, threshold: ${THRESHOLD})"
+          if [ "$ACTUAL" -gt "$THRESHOLD" ]; then
+            echo "FAIL: Firmware exceeds 80% of flash!"
+            exit 1
+          fi
+          echo "PASS: Firmware within size budget"
+
+      - name: Generate artifact hash for traceability
+        run: |
+          sha256sum stm32_automation_board.elf stm32_automation_board.bin stm32_automation_board.hex > artifact_hashes.txt
+          cat artifact_hashes.txt
+
+      - name: Upload hashes
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifact-hashes
+          path: artifact_hashes.txt
 
   release:
     needs: build
