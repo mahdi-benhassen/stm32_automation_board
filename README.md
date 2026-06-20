@@ -108,6 +108,21 @@ Tags starting with `v` trigger a release with firmware artifacts.
 | TXD0        | PB12 |
 | TXD1        | PB13 |
 
+## Validation Status
+
+| Category | Status |
+|----------|--------|
+| Build (CI) | READY — compiles clean, CI green |
+| Code quality | READY — modular, documented, reviewed |
+| Safety (watchdog/PVD/fail-safe) | READY |
+| Modbus RTU | READY — protocol-compliant, buffer-safe |
+| Modbus TCP | NOT READY — requires lwIP integration |
+| FreeRTOS | READY — correct config, hooks, priorities |
+| Production deployment | NOT READY — needs bootloader, NVRAM, self-test, certification |
+
+See [docs/VALIDATION_CHECKLIST.md](docs/VALIDATION_CHECKLIST.md) for full checklist.
+See [docs/TEST_PLAN.md](docs/TEST_PLAN.md) for bench test procedures.
+
 ## Flashing
 
 ### Option 1: STM32CubeProgrammer (CLI)
