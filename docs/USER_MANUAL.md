@@ -240,26 +240,26 @@ The board responds to **Modbus RTU** (RS485) and **Modbus TCP** (Ethernet) on th
 | Baud rate    | 115200 (default)   |
 | Data bits    | 8                  |
 | Stop bits    | 1                  |
-| Parity       | None               |
+| Parity       | Even (8E1)         |
 | Slave ID     | 1 (default)        |
 | Connector    | Terminal block A/B |
 
 **Test with `mbpoll` (Linux):**
 ```bash
 # Read 8 coils (digital outputs status)
-mbpoll -a 1 -b 115200 -t 0 -r 1 -c 8 /dev/ttyUSB0
+mbpoll -a 1 -b 115200 -p e -d 8 -s 1 -t 0 -r 1 -c 8 /dev/ttyUSB0
 
 # Read 8 discrete inputs
-mbpoll -a 1 -b 115200 -t 1 -r 1 -c 8 /dev/ttyUSB0
+mbpoll -a 1 -b 115200 -p e -d 8 -s 1 -t 1 -r 1 -c 8 /dev/ttyUSB0
 
 # Read 4 input registers (analog inputs)
-mbpoll -a 1 -b 115200 -t 3 -r 1 -c 4 /dev/ttyUSB0
+mbpoll -a 1 -b 115200 -p e -d 8 -s 1 -t 3 -r 1 -c 4 /dev/ttyUSB0
 
 # Write single coil (turn ON DO0)
-mbpoll -a 1 -b 115200 -t 0 -r 1 /dev/ttyUSB0 1
+mbpoll -a 1 -b 115200 -p e -d 8 -s 1 -t 0 -r 1 /dev/ttyUSB0 1
 
 # Write single register (set AO0 to 2047 ≈ 5.0V)
-mbpoll -a 1 -b 115200 -t 4 -r 1 /dev/ttyUSB0 2047
+mbpoll -a 1 -b 115200 -p e -d 8 -s 1 -t 4 -r 1 /dev/ttyUSB0 2047
 ```
 
 ### Ethernet (Modbus TCP)
@@ -723,7 +723,7 @@ write_relay(client, 3, True)           # Start motor 3
 from pymodbus.client import ModbusSerialClient
 
 client = ModbusSerialClient(method="rtu", port="/dev/ttyUSB0",
-                            baudrate=115200, parity="N",
+                            baudrate=115200, parity="E",
                             stopbits=1, bytesize=8)
 client.connect()
 

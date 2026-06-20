@@ -9,11 +9,14 @@ Industrial automation controller based on STM32F407 with Ethernet, RS485, and Mo
 - **4 Analog Inputs** (12-bit ADC, 0-10V range)
 - **2 Analog Outputs** (12-bit DAC, 0-10V range)
 - **4 Relays** with individual LED status indicators
-- **RS485** half-duplex interface with DE/RE direction control
+- **RS485** half-duplex interface with DE/RE direction control (8E1, Modbus-compliant)
 - **Ethernet** 10/100M RMII with built-in MAC (external PHY: LAN8720/DP83848)
 - **Modbus RTU** (slave) over RS485
 - **Modbus TCP** frame handling over Ethernet (requires lwIP integration for full TCP/IP stack at runtime)
 - **FreeRTOS V11** real-time OS with preemptive scheduler
+- **IWDG watchdog** with per-task check-in monitoring
+- **PVD brown-out detection** at 2.9V threshold
+- **Buffer overflow protection** on Modbus register reads (max 125 registers)
 
 ## Modbus Register Map
 
@@ -155,6 +158,7 @@ The firmware runs on **FreeRTOS V11** with a preemptive scheduler at 1 kHz tick 
 | `IO_Scan`     | 3 (high) | 512           | 2048          | 10 ms         | Scans all digital and analog inputs      |
 | `ModbusRTU`   | 2 (med)  | 768           | 3072          | event-driven  | Processes Modbus RTU frames from RS485   |
 | `ModbusTCP`   | 2 (med)  | 1024          | 4096          | event-driven  | Processes Modbus TCP frames from Ethernet|
+| `Watchdog`    | 1 (low)  | 256           | 1024          | 200 ms        | Refreshes IWDG if all tasks checked in   |
 
 ### Task States
 

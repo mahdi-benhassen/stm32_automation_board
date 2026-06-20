@@ -30,9 +30,9 @@ void rs485_init(uint32_t baudrate)
 
     huart_rs485.Instance          = RS485_USART;
     huart_rs485.Init.BaudRate     = baudrate;
-    huart_rs485.Init.WordLength   = UART_WORDLENGTH_8B;
+    huart_rs485.Init.WordLength   = UART_WORDLENGTH_9B;
     huart_rs485.Init.StopBits     = UART_STOPBITS_1;
-    huart_rs485.Init.Parity       = UART_PARITY_NONE;
+    huart_rs485.Init.Parity       = UART_PARITY_EVEN;
     huart_rs485.Init.Mode         = UART_MODE_TX_RX;
     huart_rs485.Init.HwFlowCtl    = UART_HWCONTROL_NONE;
     huart_rs485.Init.OverSampling = UART_OVERSAMPLING_16;

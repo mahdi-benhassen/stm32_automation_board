@@ -10,14 +10,24 @@ void HAL_Delay(uint32_t Delay)
     vTaskDelay(pdMS_TO_TICKS(Delay));
 }
 
+static IWDG_HandleTypeDef hiwdg;
+static PWR_PVDTypeDef pwr_pvd_config = {0};
+
 static TaskHandle_t io_scan_task_handle = NULL;
 static TaskHandle_t modbus_rtu_task_handle = NULL;
 static TaskHandle_t modbus_tcp_task_handle = NULL;
 
 static SemaphoreHandle_t rs485_tx_mutex = NULL;
+static SemaphoreHandle_t modbus_mutex = NULL;
 static QueueHandle_t rs485_rx_queue = NULL;
 static QueueHandle_t eth_rx_queue = NULL;
 static TimerHandle_t status_led_timer = NULL;
+
+static volatile uint8_t task_checkin = 0;
+#define CHECKIN_IO_SCAN    0x01
+#define CHECKIN_MODBUS_RTU 0x02
+#define CHECKIN_MODBUS_TCP 0x04
+#define CHECKIN_ALL        0x07
 
 static void status_led_timer_callback(TimerHandle_t xTimer)
 {
@@ -61,12 +71,13 @@ static void io_scan_task(void *pvParameters)
         digital_inputs_scan();
 
         uint16_t ai_buf[AI_COUNT];
-            analog_inputs_scan_all(ai_buf);
-            for (uint8_t i = 0; i < AI_COUNT; i++) {
-                modbus_write_holding_register(MODBUS_HOLDING_REG_OFFSET + 100 + i, ai_buf[i]);
-            }
-            modbus_sync_inputs();
+        analog_inputs_scan_all(ai_buf);
+        for (uint8_t i = 0; i < AI_COUNT; i++) {
+            modbus_write_holding_register(MODBUS_HOLDING_REG_OFFSET + 100 + i, ai_buf[i]);
+        }
+        modbus_sync_inputs();
 
+        task_checkin |= CHECKIN_IO_SCAN;
         vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(10));
     }
 }
@@ -81,7 +92,9 @@ static void modbus_rtu_task(void *pvParameters)
     for (;;) {
         rs485_process();
         if (xQueueReceive(rs485_rx_queue, &rx_frame, pdMS_TO_TICKS(50)) == pdTRUE) {
+            xSemaphoreTake(modbus_mutex, portMAX_DELAY);
             modbus_rtu_process(rx_frame.data, rx_frame.len, response, &resp_len);
+            xSemaphoreGive(modbus_mutex);
             if (resp_len > 0) {
                 if (xSemaphoreTake(rs485_tx_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
                     rs485_set_tx_mode();
@@ -92,6 +105,7 @@ static void modbus_rtu_task(void *pvParameters)
                 }
             }
         }
+        task_checkin |= CHECKIN_MODBUS_RTU;
     }
 }
 
@@ -105,10 +119,25 @@ static void modbus_tcp_task(void *pvParameters)
     for (;;) {
         ethernet_process();
         if (xQueueReceive(eth_rx_queue, &rx_frame, pdMS_TO_TICKS(10)) == pdTRUE) {
+            xSemaphoreTake(modbus_mutex, portMAX_DELAY);
             modbus_tcp_build_response(rx_frame.data, rx_frame.len, response, &resp_len);
+            xSemaphoreGive(modbus_mutex);
             if (resp_len > 0) {
                 ethernet_send(response, resp_len);
             }
+        }
+        task_checkin |= CHECKIN_MODBUS_TCP;
+    }
+}
+
+static void watchdog_task(void *pvParameters)
+{
+    (void)pvParameters;
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(200));
+        if ((task_checkin & CHECKIN_ALL) == CHECKIN_ALL) {
+            task_checkin = 0;
+            __HAL_IWDG_RELOAD_COUNTER(&hiwdg);
         }
     }
 }
@@ -125,6 +154,22 @@ void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
     (void)pcTaskName;
     __disable_irq();
     for (;;) { __NOP(); }
+}
+
+static void iwdg_init(void)
+{
+    hiwdg.Instance = IWDG;
+    hiwdg.Init.Prescaler = IWDG_PRESCALER_64;
+    hiwdg.Init.Reload = 0x0FFF;
+    hiwdg.Init.Window = 0x0FFF;
+    HAL_IWDG_Init(&hiwdg);
+}
+
+static void pvd_init(void)
+{
+    __HAL_RCC_PWR_CLK_ENABLE();
+    HAL_PWR_ConfigPVD(&pwr_pvd_config);
+    HAL_PWR_EnablePVD();
 }
 
 void system_clock_config(void)
@@ -159,6 +204,12 @@ int main(void)
     HAL_Init();
     system_clock_config();
 
+    pwr_pvd_config.PVDLevel = PWR_PVD_LEVEL_2V9;
+    pwr_pvd_config.Mode = PWR_PVD_MODE_NORMAL;
+    pvd_init();
+
+    iwdg_init();
+
     digital_inputs_init();
     digital_outputs_init();
     relays_init();
@@ -174,10 +225,11 @@ int main(void)
     analog_output_write_voltage(1, 0.0f);
 
     rs485_tx_mutex = xSemaphoreCreateMutex();
+    modbus_mutex   = xSemaphoreCreateMutex();
     rs485_rx_queue = xQueueCreate(8, sizeof(modbus_frame_t));
     eth_rx_queue   = xQueueCreate(8, sizeof(modbus_frame_t));
 
-    if (!rs485_tx_mutex || !rs485_rx_queue || !eth_rx_queue) {
+    if (!rs485_tx_mutex || !modbus_mutex || !rs485_rx_queue || !eth_rx_queue) {
         __disable_irq();
         for (;;) { __NOP(); }
     }
@@ -205,6 +257,8 @@ int main(void)
                 TASK_PRIO_MODBUS_RTU, &modbus_rtu_task_handle);
     xTaskCreate(modbus_tcp_task, "ModbusTCP", STACK_MODBUS_TCP, NULL,
                 TASK_PRIO_MODBUS_TCP, &modbus_tcp_task_handle);
+    xTaskCreate(watchdog_task, "Watchdog", STACK_WATCHDOG, NULL,
+                TASK_PRIO_WATCHDOG, NULL);
 
     vTaskStartScheduler();
 

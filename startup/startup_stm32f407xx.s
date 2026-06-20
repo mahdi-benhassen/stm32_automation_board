@@ -157,8 +157,10 @@ LoopFillZerobss:
 
   .section .text.Default_Handler,"ax",%progbits
 Default_Handler:
-Infinite_Loop:
-  b Infinite_Loop
+  ldr r0, =0xE000ED0C
+  ldr r1, =0x05FA0004
+  str r1, [r0]
+  b Default_Handler
   .size Default_Handler, .-Default_Handler
 
 .macro def_irq_handler handler_name

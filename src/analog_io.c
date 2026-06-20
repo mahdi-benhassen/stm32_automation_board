@@ -56,7 +56,7 @@ void analog_inputs_scan_all(uint16_t *buffer)
         HAL_ADC_ConfigChannel(&hadc1, &sConfig);
 
         HAL_ADC_Start(&hadc1);
-        if (HAL_ADC_PollForConversion(&hadc1, 10) == HAL_OK) {
+        if (HAL_ADC_PollForConversion(&hadc1, 2) == HAL_OK) {
             buffer[i] = HAL_ADC_GetValue(&hadc1);
         }
         HAL_ADC_Stop(&hadc1);

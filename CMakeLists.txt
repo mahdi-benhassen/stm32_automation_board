@@ -33,6 +33,7 @@ if(EXISTS "${HAL_SRC_DIR}")
         "${HAL_SRC_DIR}/Src/stm32f4xx_hal_dac.c"
         "${HAL_SRC_DIR}/Src/stm32f4xx_hal_eth.c"
         "${HAL_SRC_DIR}/Src/stm32f4xx_hal_pwr.c"
+        "${HAL_SRC_DIR}/Src/stm32f4xx_hal_iwdg.c"
         "${HAL_SRC_DIR}/Src/stm32f4xx_hal_flash.c"
         "${HAL_SRC_DIR}/Src/stm32f4xx_hal_dma.c"
         "${HAL_SRC_DIR}/Src/stm32f4xx_hal_tim.c"

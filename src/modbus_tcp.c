@@ -39,37 +39,33 @@ modbus_status_t modbus_tcp_build_response(uint8_t *rx_adu, uint16_t rx_len,
         return MODBUS_OK; /* Not for us */
     }
 
+    uint8_t is_broadcast = (unit_id == 0);
+
     uint8_t *rx_pdu    = &rx_adu[MODBUS_TCP_MBAP_SIZE];
     uint16_t rx_pdu_len = length - 1;
+    if (rx_pdu_len > MODBUS_RTU_FRAME_MAX) return MODBUS_ERROR;
 
-    uint8_t rtu_frame[MODBUS_RTU_FRAME_MAX];
-    if (rx_pdu_len + 2 > MODBUS_RTU_FRAME_MAX) return MODBUS_ERROR;
+    uint8_t tx_pdu[MODBUS_RTU_FRAME_MAX];
+    uint16_t tx_pdu_len = 0;
 
-    for (uint16_t i = 0; i < rx_pdu_len; i++) {
-        rtu_frame[i] = rx_pdu[i];
-    }
-    uint16_t rtu_rx_len = rx_pdu_len;
-
-    uint8_t rtu_response[MODBUS_RTU_FRAME_MAX];
-    uint16_t rtu_resp_len = 0;
-
-    modbus_status_t status = modbus_rtu_process(rtu_frame, rtu_rx_len,
-                                                 rtu_response, &rtu_resp_len);
+    modbus_status_t status = modbus_pdu_process(rx_pdu, rx_pdu_len,
+                                                 tx_pdu, &tx_pdu_len,
+                                                 is_broadcast);
     if (status != MODBUS_OK) return status;
 
-    /* rtu_response layout: [slave_id(1)][func_code(1)][data...][CRC_lo(1)][CRC_hi(1)]
-     * TCP PDU strips slave_id and CRC; MBAP length = 1 (unit_id) + PDU length */
-    uint16_t pdu_len = (rtu_resp_len >= 3) ? (rtu_resp_len - 3) : 0;
-    if (pdu_len == 0) return MODBUS_ERROR;
+    if (tx_pdu_len == 0) {
+        *tx_len = 0;
+        return MODBUS_OK;
+    }
 
     mb_tcp_set_uint16(tx_adu, 0, transaction_id);
     mb_tcp_set_uint16(tx_adu, 2, 0x0000); /* Protocol ID = Modbus */
-    mb_tcp_set_uint16(tx_adu, 4, 1 + pdu_len); /* unit_id + PDU */
+    mb_tcp_set_uint16(tx_adu, 4, 1 + tx_pdu_len); /* unit_id + PDU */
     tx_adu[6] = unit_id;
 
-    for (uint16_t i = 0; i < pdu_len; i++) {
-        tx_adu[MODBUS_TCP_MBAP_SIZE + i] = rtu_response[1 + i]; /* skip slave_id */
+    for (uint16_t i = 0; i < tx_pdu_len; i++) {
+        tx_adu[MODBUS_TCP_MBAP_SIZE + i] = tx_pdu[i];
     }
-    *tx_len = MODBUS_TCP_MBAP_SIZE + pdu_len;
+    *tx_len = MODBUS_TCP_MBAP_SIZE + tx_pdu_len;
     return MODBUS_OK;
 }
