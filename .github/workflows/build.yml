@@ -163,12 +163,13 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: firmware-Release
+          path: firmware
 
       - name: Check firmware size < 80% of flash
         run: |
           MAX_FLASH=$((1024 * 1024))
           THRESHOLD=$((MAX_FLASH * 80 / 100))
-          ACTUAL=$(stat -c%s stm32_automation_board.bin 2>/dev/null || stat -f%z stm32_automation_board.bin)
+          ACTUAL=$(stat -c%s firmware/stm32_automation_board.bin 2>/dev/null || stat -f%z firmware/stm32_automation_board.bin)
           echo "Firmware size: ${ACTUAL} bytes (max: ${MAX_FLASH}, threshold: ${THRESHOLD})"
           if [ "$ACTUAL" -gt "$THRESHOLD" ]; then
             echo "FAIL: Firmware exceeds 80% of flash!"
@@ -178,7 +179,9 @@ jobs:
 
       - name: Generate artifact hash for traceability
         run: |
-          sha256sum stm32_automation_board.elf stm32_automation_board.bin stm32_automation_board.hex > artifact_hashes.txt
+          cd firmware
+          sha256sum stm32_automation_board.elf stm32_automation_board.bin stm32_automation_board.hex > ../artifact_hashes.txt
+          cd ..
           cat artifact_hashes.txt
 
       - name: Upload hashes
