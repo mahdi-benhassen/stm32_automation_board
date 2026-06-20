@@ -174,9 +174,19 @@ jobs:
 
       - name: Check firmware size < 80% of flash
         run: |
+          echo "Files in firmware directory:"
+          ls -la firmware/ || true
+          find firmware -type f || true
           MAX_FLASH=$((1024 * 1024))
           THRESHOLD=$((MAX_FLASH * 80 / 100))
-          ACTUAL=$(stat -c%s firmware/stm32_automation_board.bin 2>/dev/null || stat -f%z firmware/stm32_automation_board.bin)
+          BIN_FILE=$(find firmware -name "*.bin" | head -1)
+          if [ -z "$BIN_FILE" ]; then
+            echo "FAIL: No .bin file found in firmware artifacts"
+            ls -laR firmware/
+            exit 1
+          fi
+          ACTUAL=$(stat -c%s "$BIN_FILE" 2>/dev/null || stat -f%z "$BIN_FILE")
+          echo "Firmware: $BIN_FILE"
           echo "Firmware size: ${ACTUAL} bytes (max: ${MAX_FLASH}, threshold: ${THRESHOLD})"
           if [ "$ACTUAL" -gt "$THRESHOLD" ]; then
             echo "FAIL: Firmware exceeds 80% of flash!"
@@ -186,9 +196,9 @@ jobs:
 
       - name: Generate artifact hash for traceability
         run: |
-          cd firmware
-          sha256sum stm32_automation_board.elf stm32_automation_board.bin stm32_automation_board.hex > ../artifact_hashes.txt
-          cd ..
+          find firmware -type f -name "*.elf" -o -name "*.bin" -o -name "*.hex" | while read f; do
+            sha256sum "$f"
+          done > artifact_hashes.txt
           cat artifact_hashes.txt
 
       - name: Upload hashes
