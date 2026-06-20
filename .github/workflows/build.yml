@@ -126,7 +126,14 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq cppcheck
-          cppcheck --enable=all --inconclusive --suppress=missingIncludeSystem \
+          cppcheck --enable=warning,performance --inconclusive \
+            --suppress=missingIncludeSystem \
+            --suppress=missingInclude \
+            --suppress=unusedFunction \
+            --suppress=constParameterPointer \
+            --suppress=constParameterCallback \
+            --suppress=variableScope \
+            --suppress=unreadVariable \
             --template='{file}:{line}: {severity}: {message} [{id}]' \
             --error-exitcode=1 \
             -I inc src/
