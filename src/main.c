@@ -161,7 +161,6 @@ static void iwdg_init(void)
     hiwdg.Instance = IWDG;
     hiwdg.Init.Prescaler = IWDG_PRESCALER_64;
     hiwdg.Init.Reload = 0x0FFF;
-    hiwdg.Init.Window = 0x0FFF;
     HAL_IWDG_Init(&hiwdg);
 }
 
@@ -204,7 +203,7 @@ int main(void)
     HAL_Init();
     system_clock_config();
 
-    pwr_pvd_config.PVDLevel = PWR_PVD_LEVEL_2V9;
+    pwr_pvd_config.PVDLevel = PWR_PVDLEVEL_2;
     pwr_pvd_config.Mode = PWR_PVD_MODE_NORMAL;
     pvd_init();
 
