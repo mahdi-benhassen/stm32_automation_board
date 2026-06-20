@@ -205,7 +205,7 @@ static void test_response_size_read_1_reg(void)
 static void test_crc_swap_order(void)
 {
     TEST("CRC-16 byte order (low byte first in frame)");
-    uint8_t frame[] = {0x01, 0x04, 0x02, 0xFF, 0xFF};
+    uint8_t frame[7] = {0x01, 0x04, 0x02, 0xFF, 0xFF, 0x00, 0x00};
     uint16_t crc = modbus_crc16(frame, 5);
     uint8_t crc_lo = crc & 0xFF;
     uint8_t crc_hi = (crc >> 8) & 0xFF;
