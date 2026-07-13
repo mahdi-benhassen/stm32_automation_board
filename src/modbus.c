@@ -118,6 +118,30 @@ static void modbus_regs_write(uint16_t *regs, uint16_t addr, uint16_t value)
     regs[addr] = value;
 }
 
+/* Avoid 16-bit wraparound when validating start + quantity. */
+static uint8_t modbus_address_range_valid(uint16_t start_addr, uint16_t quantity,
+                                          uint16_t table_size)
+{
+    return (start_addr < table_size && quantity <= (table_size - start_addr));
+}
+
+static uint16_t modbus_exception_response(uint8_t function_code,
+                                          uint8_t exception_code,
+                                          uint8_t *tx_pdu)
+{
+    tx_pdu[0] = function_code | 0x80U;
+    tx_pdu[1] = exception_code;
+    return 2U;
+}
+
+static uint8_t modbus_broadcast_function_supported(uint8_t function_code)
+{
+    return (function_code == MODBUS_FC_WRITE_SINGLE_COIL ||
+            function_code == MODBUS_FC_WRITE_SINGLE_REGISTER ||
+            function_code == MODBUS_FC_WRITE_MULTIPLE_COILS ||
+            function_code == MODBUS_FC_WRITE_MULTIPLE_REGISTERS);
+}
+
 static void modbus_sync_registers(void)
 {
     for (uint8_t i = 0; i < DO_COUNT; i++) {
@@ -165,16 +189,23 @@ modbus_status_t modbus_pdu_process(uint8_t *rx_pdu, uint16_t rx_pdu_len,
                                     uint8_t *tx_pdu, uint16_t *tx_pdu_len,
                                     uint8_t is_broadcast)
 {
-    if (rx_pdu_len < 1) return MODBUS_ERROR;
+    if (!rx_pdu || !tx_pdu || !tx_pdu_len || rx_pdu_len < 1U) return MODBUS_ERROR;
+
+    *tx_pdu_len = 0;
 
     uint8_t func_code  = rx_pdu[0];
     uint16_t start_addr = 0;
     uint16_t quantity   = 0;
     uint16_t pdu_len    = 1;
 
-    if (rx_pdu_len >= 5) {
+    if (rx_pdu_len >= 5U) {
         start_addr = ((uint16_t)rx_pdu[1] << 8) | rx_pdu[2];
         quantity   = ((uint16_t)rx_pdu[3] << 8) | rx_pdu[4];
+    }
+
+    /* Serial-line broadcasts only execute write functions and never respond. */
+    if (is_broadcast && !modbus_broadcast_function_supported(func_code)) {
+        return MODBUS_OK;
     }
 
     tx_pdu[0] = func_code;
@@ -182,16 +213,16 @@ modbus_status_t modbus_pdu_process(uint8_t *rx_pdu, uint16_t rx_pdu_len,
     switch (func_code) {
     case MODBUS_FC_READ_COILS:
     case MODBUS_FC_READ_DISCRETE_INPUTS: {
-        if (quantity < 1 || quantity > MODBUS_MAX_READ_COILS) {
-            tx_pdu[0] |= 0x80;
-            tx_pdu[1]  = MODBUS_EXC_ILLEGAL_DATA_VALUE;
-            pdu_len    = 2;
+        if (rx_pdu_len != 5U) {
+            pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_DATA_VALUE, tx_pdu);
             break;
         }
-        if (start_addr + quantity > MODBUS_MAX_COILS) {
-            tx_pdu[0] |= 0x80;
-            tx_pdu[1]  = MODBUS_EXC_ILLEGAL_DATA_ADDRESS;
-            pdu_len    = 2;
+        if (quantity < 1 || quantity > MODBUS_MAX_READ_COILS) {
+            pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_DATA_VALUE, tx_pdu);
+            break;
+        }
+        if (!modbus_address_range_valid(start_addr, quantity, MODBUS_MAX_COILS)) {
+            pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_DATA_ADDRESS, tx_pdu);
             break;
         }
         uint8_t byte_count = (quantity + 7) / 8;
@@ -214,16 +245,16 @@ modbus_status_t modbus_pdu_process(uint8_t *rx_pdu, uint16_t rx_pdu_len,
     }
     case MODBUS_FC_READ_HOLDING_REGISTERS:
     case MODBUS_FC_READ_INPUT_REGISTERS: {
-        if (quantity < 1 || quantity > MODBUS_MAX_READ_REGISTERS) {
-            tx_pdu[0] |= 0x80;
-            tx_pdu[1]  = MODBUS_EXC_ILLEGAL_DATA_VALUE;
-            pdu_len    = 2;
+        if (rx_pdu_len != 5U) {
+            pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_DATA_VALUE, tx_pdu);
             break;
         }
-        if (start_addr + quantity > MODBUS_MAX_REGISTERS) {
-            tx_pdu[0] |= 0x80;
-            tx_pdu[1]  = MODBUS_EXC_ILLEGAL_DATA_ADDRESS;
-            pdu_len    = 2;
+        if (quantity < 1 || quantity > MODBUS_MAX_READ_REGISTERS) {
+            pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_DATA_VALUE, tx_pdu);
+            break;
+        }
+        if (!modbus_address_range_valid(start_addr, quantity, MODBUS_MAX_REGISTERS)) {
+            pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_DATA_ADDRESS, tx_pdu);
             break;
         }
         uint8_t byte_count = quantity * 2;
@@ -242,10 +273,16 @@ modbus_status_t modbus_pdu_process(uint8_t *rx_pdu, uint16_t rx_pdu_len,
         break;
     }
     case MODBUS_FC_WRITE_SINGLE_COIL: {
+        if (rx_pdu_len != 5U) {
+            pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_DATA_VALUE, tx_pdu);
+            break;
+        }
         if (quantity != 0xFF00 && quantity != 0x0000) {
-            tx_pdu[0] |= 0x80;
-            tx_pdu[1]  = MODBUS_EXC_ILLEGAL_DATA_VALUE;
-            pdu_len    = 2;
+            pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_DATA_VALUE, tx_pdu);
+            break;
+        }
+        if (!modbus_address_range_valid(start_addr, 1U, MODBUS_MAX_COILS)) {
+            pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_DATA_ADDRESS, tx_pdu);
             break;
         }
         uint16_t coil_val = (quantity == 0xFF00) ? 1 : 0;
@@ -259,6 +296,14 @@ modbus_status_t modbus_pdu_process(uint8_t *rx_pdu, uint16_t rx_pdu_len,
         break;
     }
     case MODBUS_FC_WRITE_SINGLE_REGISTER: {
+        if (rx_pdu_len != 5U) {
+            pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_DATA_VALUE, tx_pdu);
+            break;
+        }
+        if (!modbus_address_range_valid(start_addr, 1U, MODBUS_MAX_REGISTERS)) {
+            pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_DATA_ADDRESS, tx_pdu);
+            break;
+        }
         uint16_t reg_val = quantity;
         modbus_regs_write(holding_regs, MODBUS_HOLDING_REG_OFFSET + start_addr, reg_val);
         modbus_sync_registers();
@@ -270,30 +315,22 @@ modbus_status_t modbus_pdu_process(uint8_t *rx_pdu, uint16_t rx_pdu_len,
         break;
     }
     case MODBUS_FC_WRITE_MULTIPLE_COILS: {
+        if (rx_pdu_len < 6U) {
+            pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_DATA_VALUE, tx_pdu);
+            break;
+        }
         if (quantity < 1 || quantity > MODBUS_MAX_WRITE_COILS) {
-            tx_pdu[0] |= 0x80;
-            tx_pdu[1]  = MODBUS_EXC_ILLEGAL_DATA_VALUE;
-            pdu_len    = 2;
+            pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_DATA_VALUE, tx_pdu);
             break;
         }
-        if (start_addr + quantity > MODBUS_MAX_COILS) {
-            tx_pdu[0] |= 0x80;
-            tx_pdu[1]  = MODBUS_EXC_ILLEGAL_DATA_ADDRESS;
-            pdu_len    = 2;
-            break;
-        }
-        if (rx_pdu_len < 6) {
-            tx_pdu[0] |= 0x80;
-            tx_pdu[1]  = MODBUS_EXC_ILLEGAL_DATA_VALUE;
-            pdu_len    = 2;
+        if (!modbus_address_range_valid(start_addr, quantity, MODBUS_MAX_COILS)) {
+            pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_DATA_ADDRESS, tx_pdu);
             break;
         }
         uint8_t byte_count = rx_pdu[5];
         uint8_t expected_bytes = (uint8_t)((quantity + 7) / 8);
-        if (byte_count != expected_bytes) {
-            tx_pdu[0] |= 0x80;
-            tx_pdu[1]  = MODBUS_EXC_ILLEGAL_DATA_VALUE;
-            pdu_len    = 2;
+        if (byte_count != expected_bytes || rx_pdu_len != (uint16_t)(6U + byte_count)) {
+            pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_DATA_VALUE, tx_pdu);
             break;
         }
         for (uint16_t i = 0; i < quantity; i++) {
@@ -309,29 +346,21 @@ modbus_status_t modbus_pdu_process(uint8_t *rx_pdu, uint16_t rx_pdu_len,
         break;
     }
     case MODBUS_FC_WRITE_MULTIPLE_REGISTERS: {
+        if (rx_pdu_len < 6U) {
+            pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_DATA_VALUE, tx_pdu);
+            break;
+        }
         if (quantity < 1 || quantity > MODBUS_MAX_WRITE_REGISTERS) {
-            tx_pdu[0] |= 0x80;
-            tx_pdu[1]  = MODBUS_EXC_ILLEGAL_DATA_VALUE;
-            pdu_len    = 2;
+            pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_DATA_VALUE, tx_pdu);
             break;
         }
-        if (start_addr + quantity > MODBUS_MAX_REGISTERS) {
-            tx_pdu[0] |= 0x80;
-            tx_pdu[1]  = MODBUS_EXC_ILLEGAL_DATA_ADDRESS;
-            pdu_len    = 2;
-            break;
-        }
-        if (rx_pdu_len < 6) {
-            tx_pdu[0] |= 0x80;
-            tx_pdu[1]  = MODBUS_EXC_ILLEGAL_DATA_VALUE;
-            pdu_len    = 2;
+        if (!modbus_address_range_valid(start_addr, quantity, MODBUS_MAX_REGISTERS)) {
+            pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_DATA_ADDRESS, tx_pdu);
             break;
         }
         uint8_t byte_count = rx_pdu[5];
-        if (byte_count != quantity * 2) {
-            tx_pdu[0] |= 0x80;
-            tx_pdu[1]  = MODBUS_EXC_ILLEGAL_DATA_VALUE;
-            pdu_len    = 2;
+        if (byte_count != quantity * 2U || rx_pdu_len != (uint16_t)(6U + byte_count)) {
+            pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_DATA_VALUE, tx_pdu);
             break;
         }
         for (uint16_t i = 0; i < quantity; i++) {
@@ -347,9 +376,7 @@ modbus_status_t modbus_pdu_process(uint8_t *rx_pdu, uint16_t rx_pdu_len,
         break;
     }
     default:
-        tx_pdu[0] |= 0x80;
-        tx_pdu[1]  = MODBUS_EXC_ILLEGAL_FUNCTION;
-        pdu_len    = 2;
+        pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_FUNCTION, tx_pdu);
         break;
     }
 
@@ -367,7 +394,10 @@ modbus_status_t modbus_pdu_process(uint8_t *rx_pdu, uint16_t rx_pdu_len,
 modbus_status_t modbus_rtu_process(uint8_t *rx_buf, uint16_t rx_len,
                                     uint8_t *tx_buf, uint16_t *tx_len)
 {
-    if (rx_len < 4) return MODBUS_ERROR;
+    if (!rx_buf || !tx_buf || !tx_len) return MODBUS_ERROR;
+    *tx_len = 0;
+
+    if (rx_len < 4U || rx_len > MODBUS_RTU_FRAME_MAX) return MODBUS_ERROR;
 
     uint16_t rx_crc = ((uint16_t)rx_buf[rx_len - 1] << 8) | rx_buf[rx_len - 2];
     uint16_t calc_crc = modbus_crc16(rx_buf, rx_len - 2);

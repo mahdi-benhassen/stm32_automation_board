@@ -87,13 +87,14 @@ static void modbus_rtu_task(void *pvParameters)
     (void)pvParameters;
     modbus_frame_t rx_frame;
     uint8_t response[MODBUS_RTU_FRAME_MAX];
-    uint16_t resp_len;
+    uint16_t resp_len = 0;
 
     for (;;) {
         /* Poll framing often enough for T3.5 end-of-frame (sub-ms at high baud) */
         rs485_process();
         if (xQueueReceive(rs485_rx_queue, &rx_frame, pdMS_TO_TICKS(1)) == pdTRUE) {
             xSemaphoreTake(modbus_mutex, portMAX_DELAY);
+            resp_len = 0;
             modbus_rtu_process(rx_frame.data, rx_frame.len, response, &resp_len);
             xSemaphoreGive(modbus_mutex);
             if (resp_len > 0) {
@@ -116,12 +117,13 @@ static void modbus_tcp_task(void *pvParameters)
     (void)pvParameters;
     modbus_frame_t rx_frame;
     uint8_t response[MODBUS_TCP_MAX_ADU];
-    uint16_t resp_len;
+    uint16_t resp_len = 0;
 
     for (;;) {
         ethernet_process();
         if (xQueueReceive(eth_rx_queue, &rx_frame, pdMS_TO_TICKS(10)) == pdTRUE) {
             xSemaphoreTake(modbus_mutex, portMAX_DELAY);
+            resp_len = 0;
             modbus_tcp_build_response(rx_frame.data, rx_frame.len, response, &resp_len);
             xSemaphoreGive(modbus_mutex);
             if (resp_len > 0) {
