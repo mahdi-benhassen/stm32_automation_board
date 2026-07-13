@@ -24,4 +24,11 @@ void rs485_set_rx_mode(void);
 void rs485_set_tx_mode(void);
 void rs485_process(void);
 
+/** Busy-wait for one Modbus RTU inter-frame gap (T3.5). Call before TX. */
+void rs485_delay_t35(void);
+
+/** Current T1.5 / T3.5 timeouts in microseconds (set by rs485_init). */
+uint32_t rs485_get_t15_us(void);
+uint32_t rs485_get_t35_us(void);
+
 #endif /* RS485_H */

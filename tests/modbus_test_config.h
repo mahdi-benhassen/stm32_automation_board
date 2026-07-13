@@ -38,4 +38,10 @@
 
 #define MODBUS_RTU_FRAME_MAX    256
 
+/* Modbus RTU T1.5 / T3.5 (Serial Line V1.02 §2.5.1.1) */
+#define MODBUS_RTU_BITS_PER_CHAR        11U
+#define MODBUS_RTU_BAUD_THRESHOLD       19200U
+#define MODBUS_RTU_T15_FIXED_US         750U
+#define MODBUS_RTU_T35_FIXED_US         1750U
+
 #endif /* MODBUS_TEST_H */

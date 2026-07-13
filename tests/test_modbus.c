@@ -13,6 +13,7 @@ extern int modbus_validate_quantity(uint8_t fc, uint16_t quantity);
 extern int modbus_validate_single_coil_value(uint16_t value);
 extern uint16_t modbus_response_size(uint8_t fc, uint16_t quantity);
 extern int modbus_response_fits(uint8_t fc, uint16_t quantity, uint16_t buf_size);
+extern void modbus_rtu_timeouts_us(uint32_t baudrate, uint32_t *t15_us, uint32_t *t35_us);
 
 static int tests_run = 0;
 static int tests_pass = 0;
@@ -240,6 +241,71 @@ static void test_quantity_max_all_types(void)
 }
 
 /* ============================================================
+ * RTU T1.5 / T3.5 Timeout Tests (Serial Line V1.02 §2.5.1.1)
+ * ============================================================ */
+
+static void test_rtu_timeouts_high_baud_fixed(void)
+{
+    TEST("baud > 19200 uses fixed T1.5=750us T3.5=1750us");
+    uint32_t t15 = 0, t35 = 0;
+    modbus_rtu_timeouts_us(115200, &t15, &t35);
+    ASSERT_EQ(t15, 750U);
+    ASSERT_EQ(t35, 1750U);
+    PASS();
+}
+
+static void test_rtu_timeouts_9600(void)
+{
+    TEST("9600 baud: T1.5=1.5 char, T3.5=3.5 char");
+    uint32_t t15 = 0, t35 = 0;
+    modbus_rtu_timeouts_us(9600, &t15, &t35);
+    /* char = ceil(11e6/9600) = 1146 us → T1.5=1719, T3.5=4011 */
+    uint32_t char_us = (11U * 1000000U + 9600U - 1U) / 9600U;
+    ASSERT_EQ(t15, (char_us * 3U) / 2U);
+    ASSERT_EQ(t35, (char_us * 7U) / 2U);
+    ASSERT_TRUE(t15 > 0);
+    ASSERT_TRUE(t35 > t15);
+    PASS();
+}
+
+static void test_rtu_timeouts_19200_scaled(void)
+{
+    TEST("19200 baud still uses scaled (not fixed) timeouts");
+    uint32_t t15 = 0, t35 = 0;
+    modbus_rtu_timeouts_us(19200, &t15, &t35);
+    /* threshold is exclusive: baud > 19200 is fixed */
+    ASSERT_TRUE(t15 != 750U || t35 != 1750U);
+    uint32_t char_us = (11U * 1000000U + 19200U - 1U) / 19200U;
+    ASSERT_EQ(t15, (char_us * 3U) / 2U);
+    ASSERT_EQ(t35, (char_us * 7U) / 2U);
+    PASS();
+}
+
+static void test_rtu_timeouts_t15_less_than_t35(void)
+{
+    TEST("T1.5 < T3.5 for common baud rates");
+    const uint32_t bauds[] = {1200, 9600, 19200, 38400, 115200};
+    for (unsigned i = 0; i < sizeof(bauds) / sizeof(bauds[0]); i++) {
+        uint32_t t15 = 0, t35 = 0;
+        modbus_rtu_timeouts_us(bauds[i], &t15, &t35);
+        ASSERT_TRUE(t15 < t35);
+    }
+    PASS();
+}
+
+static void test_rtu_timeouts_zero_baud_fallback(void)
+{
+    TEST("zero baud falls back to 9600 scaling");
+    uint32_t t15_z = 0, t35_z = 0;
+    uint32_t t15_9 = 0, t35_9 = 0;
+    modbus_rtu_timeouts_us(0, &t15_z, &t35_z);
+    modbus_rtu_timeouts_us(9600, &t15_9, &t35_9);
+    ASSERT_EQ(t15_z, t15_9);
+    ASSERT_EQ(t35_z, t35_9);
+    PASS();
+}
+
+/* ============================================================
  * Main
  * ============================================================ */
 
@@ -277,6 +343,13 @@ int main(void)
     test_response_size_read_126_regs();
     test_response_size_read_8_coils();
     test_response_size_read_1_reg();
+
+    printf("\n[RTU T1.5 / T3.5 Timeout Tests]\n");
+    test_rtu_timeouts_high_baud_fixed();
+    test_rtu_timeouts_9600();
+    test_rtu_timeouts_19200_scaled();
+    test_rtu_timeouts_t15_less_than_t35();
+    test_rtu_timeouts_zero_baud_fallback();
 
     printf("\n=== Results ===\n");
     printf("  Total:  %d\n", tests_run);

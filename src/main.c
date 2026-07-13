@@ -90,15 +90,17 @@ static void modbus_rtu_task(void *pvParameters)
     uint16_t resp_len;
 
     for (;;) {
+        /* Poll framing often enough for T3.5 end-of-frame (sub-ms at high baud) */
         rs485_process();
-        if (xQueueReceive(rs485_rx_queue, &rx_frame, pdMS_TO_TICKS(50)) == pdTRUE) {
+        if (xQueueReceive(rs485_rx_queue, &rx_frame, pdMS_TO_TICKS(1)) == pdTRUE) {
             xSemaphoreTake(modbus_mutex, portMAX_DELAY);
             modbus_rtu_process(rx_frame.data, rx_frame.len, response, &resp_len);
             xSemaphoreGive(modbus_mutex);
             if (resp_len > 0) {
                 if (xSemaphoreTake(rs485_tx_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+                    /* Spec: leave ≥ T3.5 silent interval before responding */
+                    rs485_delay_t35();
                     rs485_set_tx_mode();
-                    for (volatile uint32_t d = 0; d < 1000; d++) { __NOP(); }
                     rs485_send(response, resp_len);
                     rs485_set_rx_mode();
                     xSemaphoreGive(rs485_tx_mutex);

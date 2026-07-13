@@ -99,3 +99,33 @@ int modbus_response_fits(uint8_t fc, uint16_t quantity, uint16_t buf_size)
     if (needed == 0) return 0;
     return needed <= buf_size;
 }
+
+/*
+ * Compute Modbus RTU T1.5 / T3.5 timeouts (identical to src/modbus.c).
+ */
+void modbus_rtu_timeouts_us(uint32_t baudrate, uint32_t *t15_us, uint32_t *t35_us)
+{
+    uint32_t t15;
+    uint32_t t35;
+
+    if (baudrate == 0U) {
+        baudrate = 9600U;
+    }
+
+    if (baudrate > MODBUS_RTU_BAUD_THRESHOLD) {
+        t15 = MODBUS_RTU_T15_FIXED_US;
+        t35 = MODBUS_RTU_T35_FIXED_US;
+    } else {
+        uint32_t char_time_us =
+            (MODBUS_RTU_BITS_PER_CHAR * 1000000UL + baudrate - 1U) / baudrate;
+        t15 = (char_time_us * 3U) / 2U;
+        t35 = (char_time_us * 7U) / 2U;
+    }
+
+    if (t15_us) {
+        *t15_us = t15;
+    }
+    if (t35_us) {
+        *t35_us = t35;
+    }
+}

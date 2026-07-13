@@ -8,6 +8,21 @@
 #define MODBUS_TCP_FRAME_MAX    260
 #define MODBUS_TIMEOUT_MS       100
 
+/*
+ * Modbus RTU character framing (Modbus over Serial Line V1.02 §2.5.1.1)
+ *
+ * A character time is 11 bit times (start + 8 data + parity/stop).
+ * T1.5 — max silent interval between characters inside a frame.
+ * T3.5 — min silent interval that ends a frame / separates frames.
+ *
+ * baud ≤ 19200: T1.5 = 1.5 char times, T3.5 = 3.5 char times
+ * baud >  19200: T1.5 = 750 µs,         T3.5 = 1750 µs (fixed)
+ */
+#define MODBUS_RTU_BITS_PER_CHAR        11U
+#define MODBUS_RTU_BAUD_THRESHOLD       19200U
+#define MODBUS_RTU_T15_FIXED_US         750U
+#define MODBUS_RTU_T35_FIXED_US         1750U
+
 /* Modbus function codes */
 #define MODBUS_FC_READ_COILS                0x01
 #define MODBUS_FC_READ_DISCRETE_INPUTS      0x02
@@ -56,6 +71,14 @@ modbus_status_t modbus_pdu_process(uint8_t *rx_pdu, uint16_t rx_pdu_len,
                                     uint8_t *tx_pdu, uint16_t *tx_pdu_len,
                                     uint8_t is_broadcast);
 uint16_t modbus_crc16(uint8_t *buf, uint16_t len);
+
+/**
+ * Compute Modbus RTU T1.5 / T3.5 silent-interval timeouts in microseconds.
+ * @param baudrate  RS485 UART baud rate
+ * @param t15_us    [out] inter-character timeout (T1.5), may be NULL
+ * @param t35_us    [out] inter-frame timeout (T3.5), may be NULL
+ */
+void modbus_rtu_timeouts_us(uint32_t baudrate, uint32_t *t15_us, uint32_t *t35_us);
 
 uint16_t modbus_read_coil(uint16_t addr);
 void modbus_write_coil(uint16_t addr, uint16_t value);

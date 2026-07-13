@@ -53,6 +53,35 @@ uint16_t modbus_crc16(uint8_t *buf, uint16_t len)
     return ((uint16_t)crc_hi << 8) | crc_lo;
 }
 
+void modbus_rtu_timeouts_us(uint32_t baudrate, uint32_t *t15_us, uint32_t *t35_us)
+{
+    uint32_t t15;
+    uint32_t t35;
+
+    if (baudrate == 0U) {
+        baudrate = 9600U;
+    }
+
+    if (baudrate > MODBUS_RTU_BAUD_THRESHOLD) {
+        /* Spec: use fixed timeouts above 19200 baud */
+        t15 = MODBUS_RTU_T15_FIXED_US;
+        t35 = MODBUS_RTU_T35_FIXED_US;
+    } else {
+        /* char_time_us = 11 * 1e6 / baud  (rounded up) */
+        uint32_t char_time_us =
+            (MODBUS_RTU_BITS_PER_CHAR * 1000000UL + baudrate - 1U) / baudrate;
+        t15 = (char_time_us * 3U) / 2U; /* 1.5 character times */
+        t35 = (char_time_us * 7U) / 2U; /* 3.5 character times */
+    }
+
+    if (t15_us) {
+        *t15_us = t15;
+    }
+    if (t35_us) {
+        *t35_us = t35;
+    }
+}
+
 void modbus_rtu_init(uint8_t slave_id)
 {
     modbus_slave_id = slave_id;
