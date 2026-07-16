@@ -11,7 +11,8 @@ extern uint32_t SystemCoreClock;
 #define configTICK_RATE_HZ                      ((TickType_t)1000)
 #define configMAX_PRIORITIES                    (10)
 #define configMINIMAL_STACK_SIZE                ((uint16_t)256)
-#define configTOTAL_HEAP_SIZE                   ((size_t)(32 * 1024))
+/* Extra heap for lwIP tcpip thread, netconn PCBs, and Modbus TCP server */
+#define configTOTAL_HEAP_SIZE                   ((size_t)(48 * 1024))
 #define configMAX_TASK_NAME_LEN                 (16)
 #define configUSE_16_BIT_TICKS                  0
 #define configUSE_MUTEXES                       1
@@ -57,7 +58,7 @@ extern uint32_t SystemCoreClock;
 /* Task stack sizes */
 #define STACK_IO_SCAN            (configMINIMAL_STACK_SIZE * 2)
 #define STACK_MODBUS_RTU         (configMINIMAL_STACK_SIZE * 3)
-#define STACK_MODBUS_TCP         (configMINIMAL_STACK_SIZE * 4)
+#define STACK_MODBUS_TCP         (configMINIMAL_STACK_SIZE * 6) /* netconn + ADU buffers */
 #define STACK_WATCHDOG            configMINIMAL_STACK_SIZE
 
 /* Hook functions */

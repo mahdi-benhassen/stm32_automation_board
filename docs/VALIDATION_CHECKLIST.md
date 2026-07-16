@@ -104,7 +104,7 @@
 
 | # | Limitation | Impact | Mitigation |
 |---|-----------|--------|------------|
-| 1 | No TCP/IP stack (lwIP) | Modbus TCP non-functional over Ethernet (MAC only) | Integrate lwIP: ARP/IP/TCP, bind port 502 |
+| 1 | ~~No TCP/IP stack (lwIP)~~ | **FIXED (static IP)** | lwIP + netconn server on port 502; PHY/link still need hardware validation |
 | 2 | ~~No 3.5-char frame detection on RS485~~ | **FIXED** | SysTick soft T1.5/T3.5 framing |
 | 3 | No configuration persistence (NVRAM) | Settings lost on power cycle | Add I2C/flash-based parameter storage |
 | 4 | No firmware bootloader | No field updates without SWD | Implement UART or Ethernet bootloader |
@@ -126,7 +126,7 @@ See [INDUSTRIAL_READINESS_REVIEW.md](INDUSTRIAL_READINESS_REVIEW.md) for full ga
 | **Safety features** | READY — watchdog, PVD, fail-safe, reset-on-fault |
 | **Security** | PARTIAL — buffer overflow protected, no network auth |
 | **Modbus RTU** | READY — protocol-compliant, buffer-safe, mutex-protected |
-| **Modbus TCP** | NOT READY — requires lwIP integration |
+| **Modbus TCP** | CODE READY — lwIP + :502; validate on hardware |
 | **FreeRTOS** | READY — correct priorities, stacks, hooks |
 | **Hardware** | READY — no pin conflicts, correct peripheral config |
 | **Production** | NOT READY — missing bootloader, NVRAM, self-test, certification |

@@ -264,7 +264,7 @@ mbpoll -a 1 -b 115200 -p e -d 8 -s 1 -t 4 -r 1 /dev/ttyUSB0 2047
 
 ### Ethernet (Modbus TCP)
 
-> **Note:** Modbus TCP frame processing (MBAP header strip/wrap) is implemented. However, a full TCP/IP stack (e.g., lwIP) must be integrated for complete ARP/IP/TCP protocol handling. Currently, Modbus communication is fully functional over RS485 (RTU). The Modbus TCP code path is ready for use once lwIP or an equivalent stack is added.
+> **Note:** Modbus TCP is served by **lwIP** on **TCP port 502** with the static IPv4 settings in `board_config.h` (default `192.168.1.100`). Ensure the Ethernet PHY link is up and the host is on the same subnet. Modbus RTU over RS485 remains fully independent.
 
 | Parameter    | Value                  |
 |--------------|------------------------|

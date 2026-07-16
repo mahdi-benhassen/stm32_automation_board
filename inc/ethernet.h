@@ -20,4 +20,18 @@ void ethernet_set_rx_callback(eth_rx_callback_t callback);
 void ethernet_process(void);
 uint8_t ethernet_is_link_up(void);
 
+/** Copy configured MAC address (6 bytes). */
+void ethernet_get_mac(uint8_t mac[6]);
+
+/**
+ * Read one received Ethernet frame from the MAC DMA ring.
+ * @param frame  [out] pointer to frame data (owned by driver until release)
+ * @param len    [out] frame length in bytes
+ * @return ETH_OK if a frame was available
+ */
+eth_status_t ethernet_read_frame(uint8_t **frame, uint16_t *len);
+
+/** Return a frame buffer to the driver after processing. */
+void ethernet_release_frame(uint8_t *frame);
+
 #endif /* ETHERNET_H */

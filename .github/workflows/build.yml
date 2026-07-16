@@ -88,6 +88,19 @@ jobs:
           echo "FreeRTOS files:"
           find lib/FreeRTOS -name "*.c" -o -name "*.h" | wc -l
 
+      - name: Download lwIP
+        run: |
+          LWIP_VERSION="STABLE-2_2_0_RELEASE"
+          echo "Downloading lwIP ${LWIP_VERSION}..."
+          git clone --depth 1 --branch ${LWIP_VERSION} \
+            https://github.com/lwip-tcpip/lwip.git /tmp/lwip
+          mkdir -p lib/lwip
+          cp -r /tmp/lwip/src lib/lwip/
+          rm -rf /tmp/lwip
+          echo "lwIP files:"
+          find lib/lwip -name "*.c" -o -name "*.h" | wc -l
+          test -f lib/lwip/src/core/init.c
+
       - name: Verify toolchain
         run: arm-none-eabi-gcc --version
 

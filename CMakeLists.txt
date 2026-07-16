@@ -15,7 +15,6 @@ set(CMAKE_C_FLAGS_RELEASE "-Os -DNDEBUG")
 
 set(CMAKE_ASM_FLAGS "${MCU_FLAGS}")
 
-
 foreach(def ${MCU_DEFINES})
     add_compile_definitions(${def})
 endforeach()
@@ -39,10 +38,8 @@ if(EXISTS "${HAL_SRC_DIR}")
         "${HAL_SRC_DIR}/Src/stm32f4xx_hal_tim.c"
         "${HAL_SRC_DIR}/Src/stm32f4xx_hal_rcc_ex.c"
         "${HAL_SRC_DIR}/Src/stm32f4xx_hal_flash_ex.c"
-        "${HAL_SRC_DIR}/Src/stm32f4xx_hal_gpio.c"
         "${HAL_SRC_DIR}/Src/stm32f4xx_hal_dma_ex.c"
         "${HAL_SRC_DIR}/Src/stm32f4xx_hal_pwr_ex.c"
-        "${HAL_SRC_DIR}/Src/stm32f4xx_hal_cortex.c"
     )
     set(STARTUP_SRC
         "${HAL_SRC_DIR}/Src/system_stm32f4xx.c"
@@ -60,8 +57,12 @@ set(APP_SOURCES
     "src/relay.c"
     "src/rs485.c"
     "src/ethernet.c"
+    "src/ethernetif.c"
+    "src/net_init.c"
     "src/modbus.c"
     "src/modbus_tcp.c"
+    "src/modbus_tcp_server.c"
+    "src/arch/sys_arch.c"
 )
 
 set(STARTUP_ASM
@@ -92,19 +93,76 @@ else()
     message(WARNING "FreeRTOS not found at ${FREERTOS_DIR}. Build will continue without FreeRTOS.")
 endif()
 
+set(LWIP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/lib/lwip")
+
+if(EXISTS "${LWIP_DIR}/src/core/init.c")
+    set(LWIP_SOURCES
+        "${LWIP_DIR}/src/core/init.c"
+        "${LWIP_DIR}/src/core/def.c"
+        "${LWIP_DIR}/src/core/dns.c"
+        "${LWIP_DIR}/src/core/inet_chksum.c"
+        "${LWIP_DIR}/src/core/ip.c"
+        "${LWIP_DIR}/src/core/mem.c"
+        "${LWIP_DIR}/src/core/memp.c"
+        "${LWIP_DIR}/src/core/netif.c"
+        "${LWIP_DIR}/src/core/pbuf.c"
+        "${LWIP_DIR}/src/core/raw.c"
+        "${LWIP_DIR}/src/core/stats.c"
+        "${LWIP_DIR}/src/core/sys.c"
+        "${LWIP_DIR}/src/core/tcp.c"
+        "${LWIP_DIR}/src/core/tcp_in.c"
+        "${LWIP_DIR}/src/core/tcp_out.c"
+        "${LWIP_DIR}/src/core/timeouts.c"
+        "${LWIP_DIR}/src/core/udp.c"
+        "${LWIP_DIR}/src/core/ipv4/autoip.c"
+        "${LWIP_DIR}/src/core/ipv4/dhcp.c"
+        "${LWIP_DIR}/src/core/ipv4/etharp.c"
+        "${LWIP_DIR}/src/core/ipv4/icmp.c"
+        "${LWIP_DIR}/src/core/ipv4/igmp.c"
+        "${LWIP_DIR}/src/core/ipv4/ip4.c"
+        "${LWIP_DIR}/src/core/ipv4/ip4_addr.c"
+        "${LWIP_DIR}/src/core/ipv4/ip4_frag.c"
+        "${LWIP_DIR}/src/api/api_lib.c"
+        "${LWIP_DIR}/src/api/api_msg.c"
+        "${LWIP_DIR}/src/api/err.c"
+        "${LWIP_DIR}/src/api/if_api.c"
+        "${LWIP_DIR}/src/api/netbuf.c"
+        "${LWIP_DIR}/src/api/netdb.c"
+        "${LWIP_DIR}/src/api/netifapi.c"
+        "${LWIP_DIR}/src/api/sockets.c"
+        "${LWIP_DIR}/src/api/tcpip.c"
+        "${LWIP_DIR}/src/netif/ethernet.c"
+    )
+    set(LWIP_INCLUDES
+        "${LWIP_DIR}/src/include"
+    )
+else()
+    set(LWIP_SOURCES "")
+    set(LWIP_INCLUDES "")
+    message(WARNING "lwIP not found at ${LWIP_DIR}. Run scripts/fetch_lwip.sh or CI download step.")
+endif()
+
 add_executable(${PROJECT_NAME}
     ${APP_SOURCES}
     ${HAL_SOURCES}
     ${FREERTOS_SOURCES}
+    ${LWIP_SOURCES}
     ${STARTUP_SRC}
     ${STARTUP_ASM}
 )
 
 target_include_directories(${PROJECT_NAME} PRIVATE
     "inc"
+    "inc/arch"
     "${HAL_SRC_DIR}/Inc"
     "${HAL_SRC_DIR}/Inc/CMSIS_Core"
     ${FREERTOS_INCLUDES}
+    ${LWIP_INCLUDES}
+)
+
+# lwIP looks for lwipopts.h and arch/cc.h on the include path
+target_compile_definitions(${PROJECT_NAME} PRIVATE
+    LWIP_DONT_PROVIDE_BYTEORDER_FUNCTIONS
 )
 
 target_link_options(${PROJECT_NAME} PRIVATE

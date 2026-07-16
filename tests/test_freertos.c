@@ -109,9 +109,9 @@ static void test_heap_size_adequate(void)
     ASSERT_TRUE(found == 1);
     long val = config_get_value("inc/FreeRTOSConfig.h", "configTOTAL_HEAP_SIZE");
     if (val < 0) {
-        /* Expression like (32 * 1024) — just verify it contains a number >= 16 */
-        int found32 = config_has_define("inc/FreeRTOSConfig.h", "32 * 1024");
-        ASSERT_TRUE(found32 == 1);
+        /* Expression like (48 * 1024) or (32 * 1024) — verify a * 1024 heap expression */
+        int found_heap = config_has_define("inc/FreeRTOSConfig.h", "* 1024");
+        ASSERT_TRUE(found_heap == 1);
     } else {
         ASSERT_TRUE(val >= 16384);
     }

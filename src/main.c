@@ -1,4 +1,5 @@
 #include "main.h"
+#include "modbus_tcp_server.h"
 
 uint32_t HAL_GetTick(void)
 {
@@ -20,7 +21,6 @@ static TaskHandle_t modbus_tcp_task_handle = NULL;
 static SemaphoreHandle_t rs485_tx_mutex = NULL;
 static SemaphoreHandle_t modbus_mutex = NULL;
 static QueueHandle_t rs485_rx_queue = NULL;
-static QueueHandle_t eth_rx_queue = NULL;
 static TimerHandle_t status_led_timer = NULL;
 
 /* Per-task check-ins (byte stores are atomic; avoids RMW races on one flag) */
@@ -34,36 +34,28 @@ static void status_led_timer_callback(TimerHandle_t xTimer)
     HAL_GPIO_TogglePin(STATUS_LED_PORT, STATUS_LED_PIN);
 }
 
-/* RTU ≤ 256, TCP ADU ≤ 260 — size to the larger path; keep in sync with modbus_tcp.h */
-#if MODBUS_TCP_FRAME_MAX != MODBUS_TCP_MAX_ADU
-#error "MODBUS_TCP_FRAME_MAX must equal MODBUS_TCP_MAX_ADU"
-#endif
-
+/* RTU frames only in this queue (TCP uses lwIP netconn server) */
 typedef struct {
-    uint8_t data[MODBUS_TCP_FRAME_MAX];
+    uint8_t data[MODBUS_RTU_FRAME_MAX];
     uint16_t len;
 } modbus_frame_t;
 
 static void rs485_modbus_callback(uint8_t *data, uint16_t len)
 {
     modbus_frame_t frame;
-    if (len > MODBUS_RTU_FRAME_MAX) len = MODBUS_RTU_FRAME_MAX;
+    if (len > MODBUS_RTU_FRAME_MAX) {
+        len = MODBUS_RTU_FRAME_MAX;
+    }
     for (uint16_t i = 0; i < len; i++) {
         frame.data[i] = data[i];
     }
     frame.len = len;
-    xQueueSend(rs485_rx_queue, &frame, 0);
+    (void)xQueueSend(rs485_rx_queue, &frame, 0);
 }
 
-static void eth_modbus_callback(uint8_t *data, uint16_t len)
+static void tcp_watchdog_checkin(void)
 {
-    modbus_frame_t frame;
-    if (len > MODBUS_TCP_MAX_ADU) len = MODBUS_TCP_MAX_ADU;
-    for (uint16_t i = 0; i < len; i++) {
-        frame.data[i] = data[i];
-    }
-    frame.len = len;
-    xQueueSend(eth_rx_queue, &frame, 0);
+    checkin_modbus_tcp = 1;
 }
 
 static void io_scan_task(void *pvParameters)
@@ -116,28 +108,6 @@ static void modbus_rtu_task(void *pvParameters)
     }
 }
 
-static void modbus_tcp_task(void *pvParameters)
-{
-    (void)pvParameters;
-    modbus_frame_t rx_frame;
-    uint8_t response[MODBUS_TCP_MAX_ADU];
-    uint16_t resp_len = 0;
-
-    for (;;) {
-        ethernet_process();
-        if (xQueueReceive(eth_rx_queue, &rx_frame, pdMS_TO_TICKS(10)) == pdTRUE) {
-            xSemaphoreTake(modbus_mutex, portMAX_DELAY);
-            resp_len = 0;
-            modbus_tcp_build_response(rx_frame.data, rx_frame.len, response, &resp_len);
-            xSemaphoreGive(modbus_mutex);
-            if (resp_len > 0) {
-                ethernet_send(response, resp_len);
-            }
-        }
-        checkin_modbus_tcp = 1;
-    }
-}
-
 static void watchdog_task(void *pvParameters)
 {
     (void)pvParameters;
@@ -155,7 +125,9 @@ static void watchdog_task(void *pvParameters)
 void vApplicationMallocFailedHook(void)
 {
     __disable_irq();
-    for (;;) { __NOP(); }
+    for (;;) {
+        __NOP();
+    }
 }
 
 void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
@@ -163,7 +135,9 @@ void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
     (void)xTask;
     (void)pcTaskName;
     __disable_irq();
-    for (;;) { __NOP(); }
+    for (;;) {
+        __NOP();
+    }
 }
 
 /*
@@ -177,9 +151,9 @@ void vApplicationTickHook(void)
 
 static void iwdg_init(void)
 {
-    hiwdg.Instance = IWDG;
+    hiwdg.Instance       = IWDG;
     hiwdg.Init.Prescaler = IWDG_PRESCALER_64;
-    hiwdg.Init.Reload = 0x0FFF;
+    hiwdg.Init.Reload    = 0x0FFF;
     HAL_IWDG_Init(&hiwdg);
 }
 
@@ -223,7 +197,7 @@ int main(void)
     system_clock_config();
 
     pwr_pvd_config.PVDLevel = PWR_PVDLEVEL_2;
-    pwr_pvd_config.Mode = PWR_PVD_MODE_NORMAL;
+    pwr_pvd_config.Mode     = PWR_PVD_MODE_NORMAL;
     pvd_init();
 
     iwdg_init();
@@ -234,6 +208,7 @@ int main(void)
     analog_inputs_init();
     analog_outputs_init();
     rs485_init(RS485_BAUDRATE);
+    /* MAC init early; lwIP netif attaches after scheduler starts (net_init) */
     ethernet_init();
 
     modbus_rtu_init(MODBUS_RTU_ADDRESS);
@@ -245,26 +220,27 @@ int main(void)
     rs485_tx_mutex = xSemaphoreCreateMutex();
     modbus_mutex   = xSemaphoreCreateMutex();
     rs485_rx_queue = xQueueCreate(8, sizeof(modbus_frame_t));
-    eth_rx_queue   = xQueueCreate(8, sizeof(modbus_frame_t));
 
-    if (!rs485_tx_mutex || !modbus_mutex || !rs485_rx_queue || !eth_rx_queue) {
+    if (!rs485_tx_mutex || !modbus_mutex || !rs485_rx_queue) {
         __disable_irq();
-        for (;;) { __NOP(); }
+        for (;;) {
+            __NOP();
+        }
     }
 
     rs485_set_rx_callback(rs485_modbus_callback);
-    ethernet_set_rx_callback(eth_modbus_callback);
+    modbus_tcp_server_set_checkin(tcp_watchdog_checkin);
 
     GPIO_InitTypeDef status_led = {0};
     STATUS_LED_CLK_ENABLE();
-    status_led.Pin  = STATUS_LED_PIN;
-    status_led.Mode = GPIO_MODE_OUTPUT_PP;
-    status_led.Pull = GPIO_NOPULL;
+    status_led.Pin   = STATUS_LED_PIN;
+    status_led.Mode  = GPIO_MODE_OUTPUT_PP;
+    status_led.Pull  = GPIO_NOPULL;
     status_led.Speed = GPIO_SPEED_LOW;
     HAL_GPIO_Init(STATUS_LED_PORT, &status_led);
 
     status_led_timer = xTimerCreate("StatusLED", pdMS_TO_TICKS(500),
-                                     pdTRUE, NULL, status_led_timer_callback);
+                                    pdTRUE, NULL, status_led_timer_callback);
     if (status_led_timer) {
         xTimerStart(status_led_timer, 0);
     }
@@ -273,12 +249,15 @@ int main(void)
                 TASK_PRIO_IO_SCAN, &io_scan_task_handle);
     xTaskCreate(modbus_rtu_task, "ModbusRTU", STACK_MODBUS_RTU, NULL,
                 TASK_PRIO_MODBUS_RTU, &modbus_rtu_task_handle);
-    xTaskCreate(modbus_tcp_task, "ModbusTCP", STACK_MODBUS_TCP, NULL,
+    /* lwIP Modbus TCP server on port 502 (static IP from board_config.h) */
+    xTaskCreate(modbus_tcp_server_task, "ModbusTCP", STACK_MODBUS_TCP, modbus_mutex,
                 TASK_PRIO_MODBUS_TCP, &modbus_tcp_task_handle);
     xTaskCreate(watchdog_task, "Watchdog", STACK_WATCHDOG, NULL,
                 TASK_PRIO_WATCHDOG, NULL);
 
     vTaskStartScheduler();
 
-    for (;;) { __NOP(); }
+    for (;;) {
+        __NOP();
+    }
 }

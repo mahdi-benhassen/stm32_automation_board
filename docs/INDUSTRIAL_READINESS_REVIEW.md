@@ -18,7 +18,7 @@ This document maps a full industrial evaluation against the **current firmware**
 | Modbus RTU (framing, CRC, exceptions, broadcast) | **PASS** — ready for bench / RTU field trials |
 | Safety (IWDG multi-task check-in, PVD, stack/malloc hooks, fail-safe I/O) | **PASS** |
 | Firmware hardening (debounce, ADC fail-safe, RTU timebase, TCP frame size) | **PASS** (see §2) |
-| End-to-end Modbus TCP over Ethernet | **FAIL** — no TCP/IP stack (lwIP or equivalent) |
+| End-to-end Modbus TCP over Ethernet | **IN TREE** — lwIP + TCP :502 server (bench validation on hardware still required) |
 | Production deployment (bootloader, NVRAM, POST, certification) | **NOT READY** |
 
 The most important remaining blocker for industrial **Modbus TCP** is the absence of a run-time TCP/IP stack. The MBAP/PDU path (`modbus_tcp_build_response`) is implemented and tested; `ethernet.c` is only a MAC/DMA layer and cannot terminate TCP port 502.
@@ -51,7 +51,7 @@ The most important remaining blocker for industrial **Modbus TCP** is the absenc
 | PDU validation / CRC / broadcast | Strong | **PASS** — see `MODBUS_CONFORMANCE_REVIEW.md` |
 | Buffer quantity limits | Strong | **PASS** |
 | Queue frame size for TCP | 256 truncated full ADU | **FIXED** — `modbus_frame_t` sized to `MODBUS_TCP_FRAME_MAX` (260); eth path caps at `MODBUS_TCP_MAX_ADU` |
-| TCP/IP + port 502 | Missing | **OPEN** — critical for Modbus TCP field use |
+| TCP/IP + port 502 | Missing | **ADDED** — lwIP 2.2 + `modbus_tcp_server` netconn listen on `MODBUS_TCP_PORT` (502); static IP from `board_config.h` |
 
 ---
 
@@ -71,7 +71,7 @@ The most important remaining blocker for industrial **Modbus TCP** is the absenc
 
 | Step | Feature | Description | Importance | Status |
 |------|---------|-------------|------------|--------|
-| 1 | **lwIP TCP/IP stack** | ARP, DHCP/static IP, ICMP, TCP listen **:502** → `modbus_tcp_build_response()` | **Critical** | Open |
+| 1 | **lwIP TCP/IP stack** | ARP, static IP, ICMP, TCP listen **:502** → `modbus_tcp_build_response()` | **Critical** | **Done (static IP)** — DHCP still optional/open |
 | 2 | NVRAM config | Persist IP, gateway, mask, Modbus slave ID (I2C/SPI EEPROM or flash) | High | Open |
 | 3 | Firmware bootloader | Secure update over RS485 and/or Ethernet | High | Open |
 | 4 | Power-On Self-Test | Supply (ADC/PVD), DAC↔ADC loopback, register integrity | Medium | Open |
@@ -97,13 +97,19 @@ flowchart LR
 | Build pipeline | **PASS** |
 | Documentation | **PASS** |
 | Safety features | **PASS** |
-| Network service (Modbus TCP live) | **FAIL** — requires lwIP |
-| Overall | **Bench Ready / Field Prototype** |
+| Network service (Modbus TCP stack) | **PASS (code)** — lwIP + :502; **needs on-target link/PHY validation** |
+| Overall | **Bench Ready / Field Prototype** — RTU solid; TCP ready for hardware bring-up |
 
-**Recommendation:** Proceed with hardware bench validation and Modbus **RTU** field trials on this branch. Do **not** claim industrial Modbus **TCP** readiness until Step 1 (lwIP + port 502) is integrated and tested on target hardware.
+**Recommendation:** Bench-test Modbus **RTU** and bring up Ethernet PHY + ping + Modbus TCP clients against static IP `192.168.1.100:502`. Complete NVRAM, bootloader, POST, and certification before production.
 
-### Related commits (hardening)
+### Architecture (Modbus TCP path)
 
-- `3412522` — industrial firmware hardening (watchdog, timebase, DI, ADC, TCP frame size)
-- `918b510` — review polish (ADC store path, TCP size assert)
+1. `ethernet_init()` — STM32 MAC/RMII DMA  
+2. `net_init()` — `tcpip_init` + netif (static IP) + `net_in` RX task  
+3. `modbus_tcp_server_task` — lwIP `netconn` listen **:502**, MBAP reassembly, `modbus_tcp_build_response()`  
+
+### Related commits
+
+- lwIP integration + Modbus TCP server (this work)
+- `3412522` / `918b510` — industrial firmware hardening
 - `ab1de89` — SysTick tick-hook RTU timeouts (no TIM6)

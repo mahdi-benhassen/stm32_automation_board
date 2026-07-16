@@ -12,7 +12,7 @@ Industrial automation controller based on STM32F407 with Ethernet, RS485, and Mo
 - **RS485** half-duplex interface with DE/RE direction control (8E1, Modbus-compliant)
 - **Ethernet** 10/100M RMII with built-in MAC (external PHY: LAN8720/DP83848)
 - **Modbus RTU** (slave) over RS485
-- **Modbus TCP** frame handling over Ethernet (requires lwIP integration for full TCP/IP stack at runtime)
+- **Modbus TCP** slave over Ethernet (lwIP, static IP, TCP port 502)
 - **FreeRTOS V11** real-time OS with preemptive scheduler
 - **IWDG watchdog** with per-task check-in monitoring
 - **PVD brown-out detection** at 2.9V threshold
@@ -43,13 +43,17 @@ Industrial automation controller based on STM32F407 with Ethernet, RS485, and Mo
 git clone https://github.com/your-org/stm32_automation_board.git
 cd stm32_automation_board
 
-# Download STM32CubeF4 HAL
+# Download STM32CubeF4 HAL, FreeRTOS, and lwIP (or use CI which fetches all three)
 ./scripts/fetch_hal.sh
+# FreeRTOS: clone Kernel V11.1.0 into lib/FreeRTOS (see .github/workflows/build.yml)
+./scripts/fetch_lwip.sh
 
 # Build
 cmake -B build -DCMAKE_TOOLCHAIN_FILE=cmake/arm-none-eabi-gcc.cmake -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j$(nproc)
 ```
+
+Default network (static): **192.168.1.100/24**, gateway **192.168.1.1**, Modbus TCP **port 502** (see `board_config.h`).
 
 ### CI/CD
 
@@ -117,9 +121,9 @@ Tags starting with `v` trigger a release with firmware artifacts.
 | Safety (watchdog/PVD/fail-safe) | READY — per-task IWDG check-ins |
 | Firmware hardening | READY — symmetric DI debounce, ADC last-good, RTU timebase, TCP ADU size |
 | Modbus RTU | READY — protocol-compliant, T1.5/T3.5 framing, buffer-safe |
-| Modbus TCP | NOT READY — parser ready; **requires lwIP** for live Ethernet |
+| Modbus TCP | CODE READY — lwIP + TCP :502 (static IP); validate PHY/link on hardware |
 | FreeRTOS | READY — correct config, hooks, priorities |
-| Production deployment | NOT READY — needs lwIP, bootloader, NVRAM, self-test, certification |
+| Production deployment | NOT READY — needs bootloader, NVRAM, self-test, certification |
 
 See [docs/INDUSTRIAL_READINESS_REVIEW.md](docs/INDUSTRIAL_READINESS_REVIEW.md) for industrial readiness and roadmap.  
 See [docs/VALIDATION_CHECKLIST.md](docs/VALIDATION_CHECKLIST.md) for full checklist.  

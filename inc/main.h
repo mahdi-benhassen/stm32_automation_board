@@ -20,6 +20,8 @@
 #include "ethernet.h"
 #include "modbus.h"
 #include "modbus_tcp.h"
+#include "modbus_tcp_server.h"
+#include "net_init.h"
 
 void system_clock_config(void);
 

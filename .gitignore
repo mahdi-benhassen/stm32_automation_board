@@ -1,4 +1,7 @@
 build/
+lib/stm32f4_hal/
+lib/FreeRTOS/
+lib/lwip/
 *.o
 *.d
 *.elf
