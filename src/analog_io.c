@@ -61,11 +61,9 @@ void analog_inputs_scan_all(uint16_t *buffer)
         HAL_ADC_Start(&hadc1);
         if (HAL_ADC_PollForConversion(&hadc1, 2) == HAL_OK) {
             buffer[i] = HAL_ADC_GetValue(&hadc1);
+            ai_raw_values[i] = buffer[i]; /* only store successful conversions */
         }
         HAL_ADC_Stop(&hadc1);
-    }
-    for (uint8_t i = 0; i < AI_COUNT; i++) {
-        ai_raw_values[i] = buffer[i];
     }
 }
 

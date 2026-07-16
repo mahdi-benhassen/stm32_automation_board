@@ -34,6 +34,11 @@ static void status_led_timer_callback(TimerHandle_t xTimer)
     HAL_GPIO_TogglePin(STATUS_LED_PORT, STATUS_LED_PIN);
 }
 
+/* RTU ≤ 256, TCP ADU ≤ 260 — size to the larger path; keep in sync with modbus_tcp.h */
+#if MODBUS_TCP_FRAME_MAX != MODBUS_TCP_MAX_ADU
+#error "MODBUS_TCP_FRAME_MAX must equal MODBUS_TCP_MAX_ADU"
+#endif
+
 typedef struct {
     uint8_t data[MODBUS_TCP_FRAME_MAX];
     uint16_t len;
@@ -53,7 +58,7 @@ static void rs485_modbus_callback(uint8_t *data, uint16_t len)
 static void eth_modbus_callback(uint8_t *data, uint16_t len)
 {
     modbus_frame_t frame;
-    if (len > MODBUS_TCP_FRAME_MAX) len = MODBUS_TCP_FRAME_MAX;
+    if (len > MODBUS_TCP_MAX_ADU) len = MODBUS_TCP_MAX_ADU;
     for (uint16_t i = 0; i < len; i++) {
         frame.data[i] = data[i];
     }
