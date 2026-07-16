@@ -34,13 +34,18 @@ static rs485_rx_callback_t rx_callback = NULL;
 static uint32_t t15_us = MODBUS_RTU_T15_FIXED_US;
 static uint32_t t35_us = MODBUS_RTU_T35_FIXED_US;
 
+/*
+ * Assembly state (rx_buffer only). Delivery of a finished frame uses the
+ * separate flag frame_ready + completed_frame[] — there is no FRAME_READY
+ * assembly state (that was dead code from an earlier design).
+ */
 typedef enum {
     RTU_STATE_IDLE = 0,
-    RTU_STATE_RECEIVING,
-    RTU_STATE_FRAME_READY
+    RTU_STATE_RECEIVING
 } rtu_rx_state_t;
 
 static volatile rtu_rx_state_t rtu_state = RTU_STATE_IDLE;
+/* 1 = completed_frame[] holds a full ADU waiting for rs485_process/read */
 static volatile uint8_t frame_ready = 0;
 
 /* Snapshot of the completed frame for the application callback */
@@ -106,7 +111,11 @@ static void rtu_timer_stop(void)
 }
 
 /**
- * If T3.5 silence has elapsed while RECEIVING, snapshot the frame.
+ * If T3.5 silence has elapsed while RECEIVING, snapshot the frame into
+ * completed_frame[] and set frame_ready. Assembly returns to IDLE.
+ *
+ * If a previous ADU is still pending (frame_ready already set), the new
+ * assembly is discarded so we never overwrite an undelivered frame.
  * Safe to call from SysTick_Handler or the main loop (PRIMASK-nested).
  */
 static void rtu_try_complete_frame(void)
@@ -128,14 +137,18 @@ static void rtu_try_complete_frame(void)
         rtu_state = RTU_STATE_IDLE;
 
         if (len > 0U) {
-            if (len > RS485_BUFFER_SIZE) {
-                len = RS485_BUFFER_SIZE;
+            if (frame_ready) {
+                /* App has not collected the previous ADU — drop this one */
+            } else {
+                if (len > RS485_BUFFER_SIZE) {
+                    len = RS485_BUFFER_SIZE;
+                }
+                for (uint16_t i = 0; i < len; i++) {
+                    completed_frame[i] = rx_buffer[i];
+                }
+                completed_len = len;
+                frame_ready = 1U;
             }
-            for (uint16_t i = 0; i < len; i++) {
-                completed_frame[i] = rx_buffer[i];
-            }
-            completed_len = len;
-            frame_ready = 1U;
         }
     }
 
@@ -328,8 +341,16 @@ void USART2_IRQHandler(void)
     if (__HAL_UART_GET_FLAG(&huart_rs485, UART_FLAG_RXNE)) {
         uint8_t byte = (uint8_t)(huart_rs485.Instance->DR & 0xFF);
 
-        if (rtu_state == RTU_STATE_FRAME_READY) {
-            /* Application has not collected the previous frame yet — drop new data */
+        /*
+         * Backpressure: if a completed ADU is still waiting for the app
+         * (frame_ready), do not start a new assembly. Previously this used
+         * a never-assigned RTU_STATE_FRAME_READY; delivery pending is
+         * signaled by frame_ready alone (double-buffer design).
+         *
+         * Exception: if already RECEIVING, finish that assembly so T1.5/T3.5
+         * still close cleanly; rtu_try_complete drops it if frame_ready set.
+         */
+        if (frame_ready && rtu_state == RTU_STATE_IDLE) {
             (void)byte;
         } else if (rtu_state == RTU_STATE_IDLE) {
             /* First character of a new frame */
@@ -343,15 +364,23 @@ void USART2_IRQHandler(void)
 
             if (elapsed > t15_us) {
                 /* Silent gap > T1.5 → previous frame incomplete, discard and restart */
-                rx_buffer[0] = byte;
-                rx_len = 1;
+                if (frame_ready) {
+                    rtu_state = RTU_STATE_IDLE;
+                    rx_len = 0;
+                    t35_armed = 0U;
+                    (void)byte;
+                } else {
+                    rx_buffer[0] = byte;
+                    rx_len = 1;
+                    rtu_timer_start_t35();
+                }
             } else {
                 if (rx_len < RS485_BUFFER_SIZE) {
                     rx_buffer[rx_len++] = byte;
                 }
                 /* else: overflow — keep receiving so T3.5 still ends the garbage frame */
+                rtu_timer_start_t35();
             }
-            rtu_timer_start_t35();
         }
     }
 
