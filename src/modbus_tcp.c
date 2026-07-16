@@ -28,12 +28,22 @@ modbus_status_t modbus_tcp_process(uint8_t *rx_buf, uint16_t rx_len,
 modbus_status_t modbus_tcp_build_response(uint8_t *rx_adu, uint16_t rx_len,
                                            uint8_t *tx_adu, uint16_t *tx_len)
 {
-    if (rx_len < MODBUS_TCP_MBAP_SIZE + 2) return MODBUS_ERROR;
+    if (!rx_adu || !tx_adu || !tx_len) return MODBUS_ERROR;
+    *tx_len = 0;
+
+    /* MBAP (7 bytes) plus at least one PDU function-code byte. */
+    if (rx_len < MODBUS_TCP_MBAP_SIZE + 1U || rx_len > MODBUS_TCP_MAX_ADU) return MODBUS_ERROR;
 
     uint16_t transaction_id = mb_tcp_get_uint16(rx_adu, 0);
+    uint16_t protocol_id    = mb_tcp_get_uint16(rx_adu, 2);
     uint16_t length         = mb_tcp_get_uint16(rx_adu, 4);
     uint8_t  unit_id        = rx_adu[6];
-    (void)mb_tcp_get_uint16(rx_adu, 2); /* protocol_id, always 0 for Modbus */
+
+    /* Length counts Unit Identifier plus PDU; the ADU must contain exactly it. */
+    if (protocol_id != 0U || length < 2U || length > (1U + MODBUS_TCP_MAX_PDU) ||
+        rx_len != (uint16_t)(6U + length)) {
+        return MODBUS_ERROR;
+    }
 
     if (unit_id != tcp_unit_id && unit_id != 0) {
         return MODBUS_OK; /* Not for us */
@@ -42,30 +52,27 @@ modbus_status_t modbus_tcp_build_response(uint8_t *rx_adu, uint16_t rx_len,
     uint8_t *rx_pdu    = &rx_adu[MODBUS_TCP_MBAP_SIZE];
     uint16_t rx_pdu_len = length - 1;
 
-    uint8_t rtu_frame[MODBUS_RTU_FRAME_MAX];
-    if (rx_pdu_len + 2 > MODBUS_RTU_FRAME_MAX) return MODBUS_ERROR;
+    uint8_t tx_pdu[MODBUS_TCP_MAX_PDU];
+    uint16_t tx_pdu_len = 0;
 
-    for (uint16_t i = 0; i < rx_pdu_len; i++) {
-        rtu_frame[i] = rx_pdu[i];
-    }
-    uint16_t rtu_rx_len = rx_pdu_len;
-
-    uint8_t rtu_response[MODBUS_RTU_FRAME_MAX];
-    uint16_t rtu_resp_len = 0;
-
-    modbus_status_t status = modbus_rtu_process(rtu_frame, rtu_rx_len,
-                                                 rtu_response, &rtu_resp_len);
+    modbus_status_t status = modbus_pdu_process(rx_pdu, rx_pdu_len,
+                                                  tx_pdu, &tx_pdu_len,
+                                                  0U);
     if (status != MODBUS_OK) return status;
+
+    if (tx_pdu_len == 0) {
+        *tx_len = 0;
+        return MODBUS_OK;
+    }
 
     mb_tcp_set_uint16(tx_adu, 0, transaction_id);
     mb_tcp_set_uint16(tx_adu, 2, 0x0000); /* Protocol ID = Modbus */
-    uint16_t resp_length = rtu_resp_len;
-    mb_tcp_set_uint16(tx_adu, 4, resp_length);
+    mb_tcp_set_uint16(tx_adu, 4, 1 + tx_pdu_len); /* unit_id + PDU */
     tx_adu[6] = unit_id;
 
-    for (uint16_t i = 0; i < resp_length; i++) {
-        tx_adu[MODBUS_TCP_MBAP_SIZE + i] = rtu_response[i];
+    for (uint16_t i = 0; i < tx_pdu_len; i++) {
+        tx_adu[MODBUS_TCP_MBAP_SIZE + i] = tx_pdu[i];
     }
-    *tx_len = MODBUS_TCP_MBAP_SIZE + resp_length;
+    *tx_len = MODBUS_TCP_MBAP_SIZE + tx_pdu_len;
     return MODBUS_OK;
 }
