@@ -11,8 +11,29 @@ Industrial automation controller based on STM32F407 with Ethernet, RS485, and Mo
 - **4 Relays** with individual LED status indicators
 - **RS485** half-duplex interface with DE/RE direction control
 - **Ethernet** 10/100M RMII with built-in MAC (external PHY: LAN8720/DP83848)
-- **Modbus RTU** (slave) over RS485
+- **Modbus RTU** dual-role over RS485: **slave** (default) + **master** API (shares the bus)
 - **Modbus TCP** (server) over Ethernet, port 502
+- **Extended Modbus FCs**: 0x07, 0x14, 0x15, 0x17, 0x2B/0x0E (slave + master)
+
+## Modbus RTU Master API
+
+The board remains an RTU **slave** by default. After boot, the **master** transport is bound to the same RS485 port (`modbus_master_rtu_init` in `main`). Call the high-level APIs from the main loop or application code.
+
+```c
+#include "modbus_master.h"
+
+uint16_t regs[4];
+uint8_t  exc = 0;
+modbus_status_t st = modbus_master_read_holding_registers(/*slave*/2, 0, 4, regs, &exc);
+
+uint8_t status;
+st = modbus_master_read_exception_status(2, &status, &exc);
+
+modbus_master_devid_t id;
+st = modbus_master_read_device_identification(2, MODBUS_DEVID_BASIC, 0, &id, &exc);
+```
+
+Supported master function codes: **0x01–0x07, 0x0F, 0x10, 0x14, 0x15, 0x17, 0x2B/0x0E**.
 
 ## Modbus Register Map
 

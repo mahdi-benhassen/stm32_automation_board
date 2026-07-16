@@ -13,6 +13,8 @@
 #include "rs485.h"
 #include "ethernet.h"
 #include "modbus.h"
+#include "modbus_master.h"
+#include "modbus_master_rtu.h"
 #include "modbus_tcp.h"
 
 extern volatile uint32_t sys_tick;

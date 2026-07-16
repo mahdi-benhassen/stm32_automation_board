@@ -169,3 +169,195 @@ void modbus_rtu_timeouts_us(uint32_t baudrate, uint32_t *t15_us, uint32_t *t35_u
         *t35_us = t35;
     }
 }
+
+/* ============================================================
+ * Master-side PDU builders / parsers (mirrors src/modbus_master.c)
+ * ============================================================ */
+
+uint16_t modbus_master_build_read(uint8_t fc, uint16_t start, uint16_t quantity,
+                                  uint8_t *pdu, uint16_t pdu_max)
+{
+    if (!pdu || pdu_max < 5U) return 0U;
+    pdu[0] = fc;
+    pdu[1] = (uint8_t)(start >> 8);
+    pdu[2] = (uint8_t)(start & 0xFFU);
+    pdu[3] = (uint8_t)(quantity >> 8);
+    pdu[4] = (uint8_t)(quantity & 0xFFU);
+    return 5U;
+}
+
+uint16_t modbus_master_build_read_exception_status(uint8_t *pdu, uint16_t pdu_max)
+{
+    if (!pdu || pdu_max < 1U) return 0U;
+    pdu[0] = MODBUS_FC_READ_EXCEPTION_STATUS;
+    return 1U;
+}
+
+uint16_t modbus_master_build_read_file_record(uint16_t file_number,
+                                              uint16_t record_number,
+                                              uint16_t record_length,
+                                              uint8_t *pdu, uint16_t pdu_max)
+{
+    if (!pdu || pdu_max < 9U || record_length < 1U) return 0U;
+    pdu[0] = MODBUS_FC_READ_FILE_RECORD;
+    pdu[1] = 0x07;
+    pdu[2] = 0x06; /* ref type */
+    pdu[3] = (uint8_t)(file_number >> 8);
+    pdu[4] = (uint8_t)(file_number & 0xFFU);
+    pdu[5] = (uint8_t)(record_number >> 8);
+    pdu[6] = (uint8_t)(record_number & 0xFFU);
+    pdu[7] = (uint8_t)(record_length >> 8);
+    pdu[8] = (uint8_t)(record_length & 0xFFU);
+    return 9U;
+}
+
+uint16_t modbus_master_build_write_file_record(uint16_t file_number,
+                                               uint16_t record_number,
+                                               uint16_t record_length,
+                                               const uint16_t *regs,
+                                               uint8_t *pdu, uint16_t pdu_max)
+{
+    uint16_t data_bytes;
+    uint8_t req_data_len;
+    if (!pdu || !regs || record_length < 1U) return 0U;
+    data_bytes = (uint16_t)(record_length * 2U);
+    req_data_len = (uint8_t)(7U + data_bytes);
+    if ((uint16_t)(2U + req_data_len) > pdu_max) return 0U;
+    pdu[0] = MODBUS_FC_WRITE_FILE_RECORD;
+    pdu[1] = req_data_len;
+    pdu[2] = 0x06;
+    pdu[3] = (uint8_t)(file_number >> 8);
+    pdu[4] = (uint8_t)(file_number & 0xFFU);
+    pdu[5] = (uint8_t)(record_number >> 8);
+    pdu[6] = (uint8_t)(record_number & 0xFFU);
+    pdu[7] = (uint8_t)(record_length >> 8);
+    pdu[8] = (uint8_t)(record_length & 0xFFU);
+    for (uint16_t i = 0; i < record_length; i++) {
+        pdu[9U + i * 2U]     = (uint8_t)(regs[i] >> 8);
+        pdu[9U + i * 2U + 1U] = (uint8_t)(regs[i] & 0xFFU);
+    }
+    return (uint16_t)(2U + req_data_len);
+}
+
+uint16_t modbus_master_build_read_write_multiple_registers(
+    uint16_t read_start, uint16_t read_qty,
+    uint16_t write_start, uint16_t write_qty,
+    const uint16_t *write_regs,
+    uint8_t *pdu, uint16_t pdu_max)
+{
+    uint8_t write_bc;
+    if (!pdu || !write_regs || read_qty < 1U || read_qty > 125U ||
+        write_qty < 1U || write_qty > 121U) {
+        return 0U;
+    }
+    write_bc = (uint8_t)(write_qty * 2U);
+    if (pdu_max < (uint16_t)(10U + write_bc)) return 0U;
+    pdu[0] = MODBUS_FC_READ_WRITE_MULTIPLE_REGS;
+    pdu[1] = (uint8_t)(read_start >> 8);
+    pdu[2] = (uint8_t)(read_start & 0xFFU);
+    pdu[3] = (uint8_t)(read_qty >> 8);
+    pdu[4] = (uint8_t)(read_qty & 0xFFU);
+    pdu[5] = (uint8_t)(write_start >> 8);
+    pdu[6] = (uint8_t)(write_start & 0xFFU);
+    pdu[7] = (uint8_t)(write_qty >> 8);
+    pdu[8] = (uint8_t)(write_qty & 0xFFU);
+    pdu[9] = write_bc;
+    for (uint16_t i = 0; i < write_qty; i++) {
+        pdu[10U + i * 2U]      = (uint8_t)(write_regs[i] >> 8);
+        pdu[10U + i * 2U + 1U] = (uint8_t)(write_regs[i] & 0xFFU);
+    }
+    return (uint16_t)(10U + write_bc);
+}
+
+uint16_t modbus_master_build_read_device_id(uint8_t read_device_id, uint8_t object_id,
+                                            uint8_t *pdu, uint16_t pdu_max)
+{
+    if (!pdu || pdu_max < 4U) return 0U;
+    pdu[0] = MODBUS_FC_ENCAPSULATED_INTERFACE;
+    pdu[1] = MODBUS_MEI_READ_DEVICE_ID;
+    pdu[2] = read_device_id;
+    pdu[3] = object_id;
+    return 4U;
+}
+
+uint16_t modbus_master_rtu_frame(uint8_t slave_id, const uint8_t *pdu, uint16_t pdu_len,
+                                 uint8_t *adu, uint16_t adu_max)
+{
+    uint16_t crc;
+    uint16_t total;
+    if (!pdu || !adu || pdu_len == 0U || pdu_len > 253U) return 0U;
+    total = (uint16_t)(1U + pdu_len + 2U);
+    if (total > adu_max) return 0U;
+    adu[0] = slave_id;
+    for (uint16_t i = 0; i < pdu_len; i++) {
+        adu[1U + i] = pdu[i];
+    }
+    crc = modbus_crc16(adu, (uint16_t)(1U + pdu_len));
+    adu[1U + pdu_len]      = (uint8_t)(crc & 0xFFU);
+    adu[1U + pdu_len + 1U] = (uint8_t)(crc >> 8);
+    return total;
+}
+
+int modbus_master_parse_exception_status(const uint8_t *pdu, uint16_t pdu_len,
+                                         uint8_t *status)
+{
+    if (!pdu || !status || pdu_len != 2U ||
+        pdu[0] != MODBUS_FC_READ_EXCEPTION_STATUS) {
+        return 0;
+    }
+    *status = pdu[1];
+    return 1;
+}
+
+int modbus_master_parse_read_registers(const uint8_t *pdu, uint16_t pdu_len,
+                                       uint16_t quantity, uint16_t *regs_out)
+{
+    uint8_t byte_count;
+    if (!pdu || !regs_out || pdu_len < 2U || quantity < 1U) return 0;
+    byte_count = pdu[1];
+    if (byte_count != (uint8_t)(quantity * 2U) ||
+        pdu_len != (uint16_t)(2U + byte_count)) {
+        return 0;
+    }
+    for (uint16_t i = 0; i < quantity; i++) {
+        regs_out[i] = ((uint16_t)pdu[2U + i * 2U] << 8) | pdu[2U + i * 2U + 1U];
+    }
+    return 1;
+}
+
+int modbus_master_parse_read_file_record(const uint8_t *pdu, uint16_t pdu_len,
+                                         uint16_t record_length, uint16_t *regs_out)
+{
+    uint8_t resp_data_len;
+    uint8_t file_resp_len;
+    uint16_t need;
+    if (!pdu || !regs_out || pdu_len < 4U ||
+        pdu[0] != MODBUS_FC_READ_FILE_RECORD || record_length < 1U) {
+        return 0;
+    }
+    resp_data_len = pdu[1];
+    if (pdu_len != (uint16_t)(2U + resp_data_len)) return 0;
+    file_resp_len = pdu[2];
+    need = (uint16_t)(1U + record_length * 2U);
+    if (file_resp_len != need || pdu[3] != 0x06 ||
+        resp_data_len != (uint8_t)(1U + file_resp_len)) {
+        return 0;
+    }
+    for (uint16_t i = 0; i < record_length; i++) {
+        regs_out[i] = ((uint16_t)pdu[4U + i * 2U] << 8) | pdu[4U + i * 2U + 1U];
+    }
+    return 1;
+}
+
+int modbus_master_parse_device_id_header(const uint8_t *pdu, uint16_t pdu_len,
+                                         uint8_t *conformity, uint8_t *obj_count)
+{
+    if (!pdu || pdu_len < 7U ||
+        pdu[0] != MODBUS_FC_ENCAPSULATED_INTERFACE ||
+        pdu[1] != MODBUS_MEI_READ_DEVICE_ID) {
+        return 0;
+    }
+    if (conformity) *conformity = pdu[3];
+    if (obj_count) *obj_count = pdu[6];
+    return 1;
+}

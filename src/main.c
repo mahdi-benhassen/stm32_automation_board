@@ -1,4 +1,5 @@
 #include "main.h"
+#include "modbus_master_rtu.h"
 
 volatile uint32_t sys_tick = 0;
 
@@ -74,9 +75,10 @@ int main(void)
     rs485_init(RS485_BAUDRATE);
     ethernet_init();
 
-    /* Initialize Modbus stacks */
+    /* Initialize Modbus stacks (slave + master share RS485) */
     modbus_rtu_init(MODBUS_RTU_ADDRESS);
     modbus_tcp_init(MODBUS_SLAVE_ID);
+    modbus_master_rtu_init();
 
     /* Set callback handlers */
     rs485_set_rx_callback(rs485_modbus_rx_callback);
@@ -118,6 +120,15 @@ static void rs485_modbus_rx_callback(uint8_t *data, uint16_t len)
 {
     uint8_t response[MODBUS_RTU_FRAME_MAX];
     uint16_t resp_len = 0;
+
+    /*
+     * Dual-role: while a master transaction is armed, deliver the frame
+     * to the master path so it is not treated as a slave request.
+     */
+    if (modbus_master_rtu_is_waiting()) {
+        modbus_master_rtu_on_frame(data, len);
+        return;
+    }
 
     modbus_rtu_process(data, len, response, &resp_len);
     if (resp_len > 0) {
