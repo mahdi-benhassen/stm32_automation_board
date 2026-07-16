@@ -57,9 +57,49 @@ int modbus_validate_quantity(uint8_t fc, uint16_t quantity)
         return (quantity >= 1 && quantity <= MODBUS_MAX_WRITE_COILS);
     case MODBUS_FC_WRITE_MULTIPLE_REGISTERS:
         return (quantity >= 1 && quantity <= MODBUS_MAX_WRITE_REGISTERS);
+    case MODBUS_FC_READ_WRITE_MULTIPLE_REGS:
+        /* FC 0x17 uses separate read/write qtys; here quantity = write qty max 121 */
+        return (quantity >= 1 && quantity <= 121);
     default:
         return 1;
     }
+}
+
+/*
+ * Known-supported function codes for this firmware image (issue #3).
+ */
+int modbus_fc_supported(uint8_t fc)
+{
+    switch (fc) {
+    case MODBUS_FC_READ_COILS:
+    case MODBUS_FC_READ_DISCRETE_INPUTS:
+    case MODBUS_FC_READ_HOLDING_REGISTERS:
+    case MODBUS_FC_READ_INPUT_REGISTERS:
+    case MODBUS_FC_WRITE_SINGLE_COIL:
+    case MODBUS_FC_WRITE_SINGLE_REGISTER:
+    case MODBUS_FC_READ_EXCEPTION_STATUS:
+    case MODBUS_FC_WRITE_MULTIPLE_COILS:
+    case MODBUS_FC_WRITE_MULTIPLE_REGISTERS:
+    case MODBUS_FC_READ_FILE_RECORD:
+    case MODBUS_FC_WRITE_FILE_RECORD:
+    case MODBUS_FC_READ_WRITE_MULTIPLE_REGS:
+    case MODBUS_FC_ENCAPSULATED_INTERFACE:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/* FC 0x2B MEI type 0x0E is the only MEI we implement */
+int modbus_mei_supported(uint8_t mei_type)
+{
+    return (mei_type == MODBUS_MEI_READ_DEVICE_ID);
+}
+
+/* Virtual file number valid for FC 0x14/0x15 (files 1..4) */
+int modbus_file_number_valid(uint16_t file_number)
+{
+    return (file_number >= 1 && file_number <= 4);
 }
 
 /*

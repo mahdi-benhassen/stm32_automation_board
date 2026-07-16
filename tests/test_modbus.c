@@ -14,6 +14,9 @@ extern int modbus_validate_single_coil_value(uint16_t value);
 extern uint16_t modbus_response_size(uint8_t fc, uint16_t quantity);
 extern int modbus_response_fits(uint8_t fc, uint16_t quantity, uint16_t buf_size);
 extern void modbus_rtu_timeouts_us(uint32_t baudrate, uint32_t *t15_us, uint32_t *t35_us);
+extern int modbus_fc_supported(uint8_t fc);
+extern int modbus_mei_supported(uint8_t mei_type);
+extern int modbus_file_number_valid(uint16_t file_number);
 
 static int tests_run = 0;
 static int tests_pass = 0;
@@ -306,6 +309,66 @@ static void test_rtu_timeouts_zero_baud_fallback(void)
 }
 
 /* ============================================================
+ * Extended function codes (issue #3)
+ * ============================================================ */
+
+static void test_fc_exception_status_supported(void)
+{
+    TEST("FC 0x07 Read Exception Status is supported");
+    ASSERT_TRUE(modbus_fc_supported(MODBUS_FC_READ_EXCEPTION_STATUS));
+    PASS();
+}
+
+static void test_fc_file_record_supported(void)
+{
+    TEST("FC 0x14 / 0x15 File Record R/W are supported");
+    ASSERT_TRUE(modbus_fc_supported(MODBUS_FC_READ_FILE_RECORD));
+    ASSERT_TRUE(modbus_fc_supported(MODBUS_FC_WRITE_FILE_RECORD));
+    PASS();
+}
+
+static void test_fc_read_write_multiple_supported(void)
+{
+    TEST("FC 0x17 Read/Write Multiple Registers is supported");
+    ASSERT_TRUE(modbus_fc_supported(MODBUS_FC_READ_WRITE_MULTIPLE_REGS));
+    PASS();
+}
+
+static void test_fc_device_id_mei_supported(void)
+{
+    TEST("FC 0x2B MEI 0x0E Read Device Identification is supported");
+    ASSERT_TRUE(modbus_fc_supported(MODBUS_FC_ENCAPSULATED_INTERFACE));
+    ASSERT_TRUE(modbus_mei_supported(MODBUS_MEI_READ_DEVICE_ID));
+    ASSERT_FALSE(modbus_mei_supported(0x0D));
+    PASS();
+}
+
+static void test_fc_unknown_not_supported(void)
+{
+    TEST("unknown FC 0x08 Diagnostics is not claimed as supported");
+    ASSERT_FALSE(modbus_fc_supported(0x08));
+    PASS();
+}
+
+static void test_file_number_valid_range(void)
+{
+    TEST("file numbers 1..4 valid, 0 and 5 invalid");
+    ASSERT_FALSE(modbus_file_number_valid(0));
+    ASSERT_TRUE(modbus_file_number_valid(1));
+    ASSERT_TRUE(modbus_file_number_valid(4));
+    ASSERT_FALSE(modbus_file_number_valid(5));
+    PASS();
+}
+
+static void test_fc17_write_qty_limit(void)
+{
+    TEST("FC 0x17 write quantity max 121");
+    ASSERT_TRUE(modbus_validate_quantity(MODBUS_FC_READ_WRITE_MULTIPLE_REGS, 121));
+    ASSERT_FALSE(modbus_validate_quantity(MODBUS_FC_READ_WRITE_MULTIPLE_REGS, 122));
+    PASS();
+}
+
+/* ============================================================
  * Main
  * ============================================================ */
 
@@ -350,6 +413,15 @@ int main(void)
     test_rtu_timeouts_19200_scaled();
     test_rtu_timeouts_t15_less_than_t35();
     test_rtu_timeouts_zero_baud_fallback();
+
+    printf("\n[Extended Function Code Tests — issue #3]\n");
+    test_fc_exception_status_supported();
+    test_fc_file_record_supported();
+    test_fc_read_write_multiple_supported();
+    test_fc_device_id_mei_supported();
+    test_fc_unknown_not_supported();
+    test_file_number_valid_range();
+    test_fc17_write_qty_limit();
 
     printf("\n=== Results ===\n");
     printf("  Total:  %d\n", tests_run);

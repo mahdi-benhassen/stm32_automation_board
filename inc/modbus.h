@@ -30,8 +30,30 @@
 #define MODBUS_FC_READ_INPUT_REGISTERS      0x04
 #define MODBUS_FC_WRITE_SINGLE_COIL         0x05
 #define MODBUS_FC_WRITE_SINGLE_REGISTER     0x06
+#define MODBUS_FC_READ_EXCEPTION_STATUS     0x07
 #define MODBUS_FC_WRITE_MULTIPLE_COILS      0x0F
 #define MODBUS_FC_WRITE_MULTIPLE_REGISTERS  0x10
+#define MODBUS_FC_READ_FILE_RECORD          0x14
+#define MODBUS_FC_WRITE_FILE_RECORD         0x15
+#define MODBUS_FC_READ_WRITE_MULTIPLE_REGS  0x17
+#define MODBUS_FC_ENCAPSULATED_INTERFACE    0x2B
+
+/* MEI types for FC 0x2B */
+#define MODBUS_MEI_READ_DEVICE_ID           0x0E
+
+/* Read Device Identification (MEI 0x0E) */
+#define MODBUS_DEVID_BASIC                  0x01
+#define MODBUS_DEVID_REGULAR                0x02
+#define MODBUS_DEVID_EXTENDED               0x03
+#define MODBUS_DEVID_SPECIFIC               0x04
+#define MODBUS_DEVID_OBJ_VENDOR_NAME        0x00
+#define MODBUS_DEVID_OBJ_PRODUCT_CODE       0x01
+#define MODBUS_DEVID_OBJ_MAJOR_MINOR_REV    0x02
+
+/* Virtual file store limits for FC 0x14 / 0x15 (no filesystem) */
+#define MODBUS_FILE_COUNT                   4U
+#define MODBUS_FILE_SIZE_REGS               128U
+#define MODBUS_FILE_REF_TYPE                0x06U
 
 /* Modbus exception codes */
 #define MODBUS_EXC_NONE                     0x00
