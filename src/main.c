@@ -160,6 +160,15 @@ void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
     for (;;) { __NOP(); }
 }
 
+/*
+ * FreeRTOS owns SysTick_Handler. Use the tick hook for portable Modbus RTU
+ * T1.5/T3.5 soft timeouts (no TIM6). Keep this path short.
+ */
+void vApplicationTickHook(void)
+{
+    rs485_on_systick();
+}
+
 static void iwdg_init(void)
 {
     hiwdg.Instance = IWDG;

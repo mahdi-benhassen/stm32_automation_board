@@ -24,6 +24,12 @@ void rs485_set_rx_mode(void);
 void rs485_set_tx_mode(void);
 void rs485_process(void);
 
+/**
+ * Soft T3.5 timeout tick — call from FreeRTOS vApplicationTickHook
+ * (SysTick is owned by the kernel; do not override SysTick_Handler).
+ */
+void rs485_on_systick(void);
+
 /** Busy-wait for one Modbus RTU inter-frame gap (T3.5). Call before TX. */
 void rs485_delay_t35(void);
 

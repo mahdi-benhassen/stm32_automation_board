@@ -4,12 +4,20 @@
 /*
  * Modbus RTU framing over RS485
  * -----------------------------
- * T1.5 / T3.5 character timeouts are enforced with TIM6 (1 µs tick):
+ * T1.5 / T3.5 character timeouts use the Cortex-M SysTick timebase
+ * (portable — no STM32-specific peripheral timer):
  *
  *  - On each RX byte: if silence since the previous byte exceeded T1.5,
  *    the incomplete frame is discarded and a new one starts with this byte.
- *  - When silence reaches T3.5 after the last byte, TIM6 IRQ marks the
- *    frame complete; rs485_process() delivers it to the registered callback.
+ *  - When silence reaches T3.5 after the last byte, the FreeRTOS tick hook
+ *    (rs485_on_systick) marks the frame complete; rs485_process() also
+ *    polls the same soft timeout for lower latency between 1 ms ticks.
+ *
+ * FreeRTOS owns SysTick_Handler (xPortSysTickHandler). We therefore:
+ *  - maintain a private 1 ms counter in rs485_on_systick (tick hook), so
+ *    USART IRQs above configMAX_SYSCALL_INTERRUPT_PRIORITY never need
+ *    FreeRTOS FromISR APIs;
+ *  - combine that counter with SysTick->VAL for microsecond resolution.
  *
  * See Modbus over Serial Line V1.02 §2.5.1.1.
  */
@@ -38,53 +46,128 @@ static volatile uint8_t frame_ready = 0;
 static uint8_t completed_frame[RS485_BUFFER_SIZE];
 static volatile uint16_t completed_len = 0;
 
+/* Soft timer: private ms tick + last RX timestamp + T3.5 armed flag */
+static volatile uint32_t rtu_ms_tick = 0;
+static volatile uint32_t last_byte_us = 0;
+static volatile uint8_t  t35_armed = 0;
+
 /* ============================================================
- * TIM6 — 1 MHz free-run / one-shot for T1.5 measurement & T3.5 EOF
- * APB1 = 42 MHz → timer kernel clock = 84 MHz → PSC=83 → 1 MHz
+ * SysTick-based microsecond timebase (portable Cortex-M)
  * ============================================================ */
-static void rtu_timer_init(void)
+
+/**
+ * Free-running microsecond clock from SysTick.
+ *
+ * Uses rtu_ms_tick (advanced from the FreeRTOS tick hook) + VAL.
+ * COUNTFLAG compensates when a tick overflowed but the hook has not run yet.
+ * rs485_on_systick() must clear COUNTFLAG when it increments rtu_ms_tick.
+ */
+static uint32_t rtu_time_us(void)
 {
-    __HAL_RCC_TIM6_CLK_ENABLE();
+    uint32_t ms;
+    uint32_t val;
+    uint32_t load;
+    uint32_t primask = __get_PRIMASK();
 
-    TIM6->CR1 = 0;
-    TIM6->PSC = 83U;          /* 84 MHz / 84 = 1 MHz → 1 tick = 1 µs */
-    TIM6->ARR = 0xFFFF;
-    TIM6->EGR = TIM_EGR_UG;   /* load prescaler */
-    TIM6->SR  = 0;
-    TIM6->DIER = 0;
-    TIM6->CNT = 0;
+    __disable_irq();
+    ms   = rtu_ms_tick;
+    val  = SysTick->VAL;
+    load = SysTick->LOAD;
+    if ((SysTick->CTRL & SysTick_CTRL_COUNTFLAG_Msk) != 0U) {
+        /* Overflow pending: VAL is already in the new period */
+        ms++;
+        val = SysTick->VAL;
+    }
+    if (primask == 0U) {
+        __enable_irq();
+    }
 
-    HAL_NVIC_SetPriority(TIM6_DAC_IRQn, 2, 0);
-    HAL_NVIC_EnableIRQ(TIM6_DAC_IRQn);
+    /* LOAD+1 ticks per millisecond; VAL counts down */
+    return (ms * 1000U) + (((load - val) * 1000U) / (load + 1U));
+}
+
+static uint32_t rtu_elapsed_us(void)
+{
+    return rtu_time_us() - last_byte_us;
 }
 
 static void rtu_timer_start_t35(void)
 {
-    TIM6->CR1 = 0;
-    TIM6->SR  = 0;
-    TIM6->CNT = 0;
-    TIM6->ARR = (t35_us > 0U) ? (t35_us - 1U) : 0U;
-    TIM6->DIER = TIM_DIER_UIE;
-    /* One-pulse: stop at update; CNT is readable until then for T1.5 checks */
-    TIM6->CR1 = TIM_CR1_OPM | TIM_CR1_CEN;
+    last_byte_us = rtu_time_us();
+    t35_armed = 1U;
 }
 
 static void rtu_timer_stop(void)
 {
-    TIM6->CR1 = 0;
-    TIM6->DIER = 0;
-    TIM6->SR  = 0;
+    t35_armed = 0U;
 }
 
-static uint32_t rtu_timer_elapsed_us(void)
+/**
+ * If T3.5 silence has elapsed while RECEIVING, snapshot the frame.
+ * Safe to call from the tick hook or a task (PRIMASK-nested).
+ */
+static void rtu_try_complete_frame(void)
 {
-    return TIM6->CNT;
+    /* Fast path: idle most of the time (tick hook calls this every 1 ms) */
+    if (!t35_armed) {
+        return;
+    }
+
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+
+    if (t35_armed && rtu_state == RTU_STATE_RECEIVING &&
+        (rtu_elapsed_us() >= t35_us)) {
+        uint16_t len = rx_len;
+
+        t35_armed = 0U;
+        rx_len = 0;
+        rtu_state = RTU_STATE_IDLE;
+
+        if (len > 0U) {
+            if (len > RS485_BUFFER_SIZE) {
+                len = RS485_BUFFER_SIZE;
+            }
+            for (uint16_t i = 0; i < len; i++) {
+                completed_frame[i] = rx_buffer[i];
+            }
+            completed_len = len;
+            frame_ready = 1U;
+        }
+    }
+
+    if (primask == 0U) {
+        __enable_irq();
+    }
 }
 
 static void rtu_reset_frame(void)
 {
     rx_len = 0;
     rtu_state = RTU_STATE_IDLE;
+    t35_armed = 0U;
+}
+
+/*
+ * Called once per FreeRTOS tick (vApplicationTickHook → here).
+ * Advances the private ms counter and checks T3.5 EOF.
+ */
+void rs485_on_systick(void)
+{
+    uint32_t primask = __get_PRIMASK();
+
+    __disable_irq();
+    /*
+     * Clear COUNTFLAG before bumping rtu_ms_tick so rtu_time_us() never
+     * double-counts after the hook has run.
+     */
+    (void)SysTick->CTRL;
+    rtu_ms_tick++;
+    if (primask == 0U) {
+        __enable_irq();
+    }
+
+    rtu_try_complete_frame();
 }
 
 void rs485_init(uint32_t baudrate)
@@ -121,12 +204,14 @@ void rs485_init(uint32_t baudrate)
     HAL_UART_Init(&huart_rs485);
 
     modbus_rtu_timeouts_us(baudrate, &t15_us, &t35_us);
-    rtu_timer_init();
 
     rx_len = 0;
     rtu_state = RTU_STATE_IDLE;
     frame_ready = 0;
     completed_len = 0;
+    t35_armed = 0;
+    last_byte_us = 0;
+    /* rtu_ms_tick is advanced by the tick hook after the scheduler starts */
 
     __HAL_UART_ENABLE_IT(&huart_rs485, UART_IT_RXNE);
     HAL_NVIC_SetPriority(USART2_IRQn, 1, 0);
@@ -147,13 +232,9 @@ void rs485_delay_t35(void)
 {
     /* Inter-frame turnaround: wait at least T3.5 before driving the bus */
     rtu_timer_stop();
-    TIM6->CNT = 0;
-    TIM6->ARR = (t35_us > 0U) ? (t35_us - 1U) : 0U;
-    TIM6->SR  = 0;
-    TIM6->DIER = 0;
-    TIM6->CR1 = TIM_CR1_OPM | TIM_CR1_CEN;
-    while ((TIM6->CR1 & TIM_CR1_CEN) != 0U) {
-        /* wait until one-pulse mode clears CEN */
+    uint32_t start = rtu_time_us();
+    while ((rtu_time_us() - start) < t35_us) {
+        /* busy-wait using SysTick µs timebase (sub-ms at high baud) */
     }
 }
 
@@ -231,6 +312,9 @@ void rs485_set_rx_callback(rs485_rx_callback_t callback)
 
 void rs485_process(void)
 {
+    /* Poll T3.5 between ticks for lower EOF latency (modbus_rtu_task) */
+    rtu_try_complete_frame();
+
     if (!rx_callback) {
         return;
     }
@@ -270,7 +354,7 @@ void USART2_IRQHandler(void)
             rtu_timer_start_t35();
         } else {
             /* RECEIVING: enforce inter-character T1.5 */
-            uint32_t elapsed = rtu_timer_elapsed_us();
+            uint32_t elapsed = rtu_elapsed_us();
 
             if (elapsed > t15_us) {
                 /* Silent gap > T1.5 → previous frame incomplete, discard and restart */
@@ -294,29 +378,4 @@ void USART2_IRQHandler(void)
     }
 
     HAL_UART_IRQHandler(&huart_rs485);
-}
-
-void TIM6_DAC_IRQHandler(void)
-{
-    if (TIM6->SR & TIM_SR_UIF) {
-        TIM6->SR = ~TIM_SR_UIF;
-        rtu_timer_stop();
-
-        if (rtu_state == RTU_STATE_RECEIVING && rx_len > 0) {
-            /* T3.5 silence → end of frame (Modbus RTU) */
-            uint16_t len = rx_len;
-            if (len > RS485_BUFFER_SIZE) {
-                len = RS485_BUFFER_SIZE;
-            }
-            for (uint16_t i = 0; i < len; i++) {
-                completed_frame[i] = rx_buffer[i];
-            }
-            completed_len = len;
-            frame_ready = 1;
-            rx_len = 0;
-            rtu_state = RTU_STATE_IDLE;
-        } else {
-            rtu_reset_frame();
-        }
-    }
 }
