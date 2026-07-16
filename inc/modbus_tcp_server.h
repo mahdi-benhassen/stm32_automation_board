@@ -5,7 +5,8 @@
  * FreeRTOS task entry: brings up the network stack (if needed) and serves
  * Modbus TCP on port MODBUS_TCP_PORT (502) via lwIP netconn API.
  *
- * @param pvParameters  SemaphoreHandle_t* modbus_mutex (shared register lock)
+ * @param pvParameters  SemaphoreHandle_t modbus_mutex (shared register lock;
+ *                      pass the handle value, not a pointer-to-handle)
  */
 void modbus_tcp_server_task(void *pvParameters);
 

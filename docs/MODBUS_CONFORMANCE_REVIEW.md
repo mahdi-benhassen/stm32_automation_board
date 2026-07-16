@@ -54,6 +54,19 @@ Modbus/TCP transport is implemented via lwIP (static IP, port 502). On-target Et
 
 File records are a **RAM virtual store** (not a filesystem); device identification is basic-level only (no regular/extended optional objects 0x03–0x06).
 
+## Integration review (RTU / TCP / FreeRTOS)
+
+| Path | Integration |
+|------|-------------|
+| RTU | USART IRQ → soft T1.5/T3.5 → `rs485_process` → queue → `modbus_rtu_process` under `modbus_mutex` |
+| TCP | lwIP netconn :502 → MBAP reassembly → `modbus_tcp_build_response` → `modbus_pdu_process` under same mutex |
+| IO scan | DI/AI updates take `modbus_mutex` so table writes do not race PDU handlers |
+| FC 0x02 / 0x07 | Refresh debounced DI snapshot at PDU time |
+| FC 0x04 | Refresh input-reg AI mirror from holding 100+ at PDU time |
+| Response size | RTU PDU ≤ 253; TCP ADU ≤ 260 enforced before framing |
+
+Both branches share the same `modbus_pdu_process` core for the extended FCs.
+
 ## Verification
 
 - `git diff --check` passed.

@@ -285,6 +285,14 @@ modbus_status_t modbus_pdu_process(uint8_t *rx_pdu, uint16_t rx_pdu_len,
             pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_DATA_ADDRESS, tx_pdu);
             break;
         }
+        /* Keep DI mirror fresh for discrete-input reads */
+        if (func_code == MODBUS_FC_READ_DISCRETE_INPUTS) {
+            uint8_t di = digital_inputs_read_all();
+            for (uint8_t i = 0; i < DI_COUNT; i++) {
+                modbus_bit_write(discrete_bits, MODBUS_DISCRETE_INPUT_OFFSET + i,
+                                 (di >> i) & 0x01U);
+            }
+        }
         uint8_t byte_count = (quantity + 7) / 8;
         tx_pdu[1] = byte_count;
         for (uint8_t i = 0; i < byte_count; i++) {
@@ -316,6 +324,13 @@ modbus_status_t modbus_pdu_process(uint8_t *rx_pdu, uint16_t rx_pdu_len,
         if (!modbus_address_range_valid(start_addr, quantity, MODBUS_MAX_REGISTERS)) {
             pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_DATA_ADDRESS, tx_pdu);
             break;
+        }
+        /* Input regs 0..AI_COUNT-1 mirror holding 100.. (AI cache from scan) */
+        if (func_code == MODBUS_FC_READ_INPUT_REGISTERS) {
+            for (uint8_t i = 0; i < AI_COUNT; i++) {
+                input_regs[MODBUS_INPUT_REG_OFFSET + i] =
+                    holding_regs[MODBUS_HOLDING_REG_OFFSET + 100 + i];
+            }
         }
         uint8_t byte_count = quantity * 2;
         tx_pdu[1] = byte_count;
@@ -436,22 +451,34 @@ modbus_status_t modbus_pdu_process(uint8_t *rx_pdu, uint16_t rx_pdu_len,
         break;
     }
 
-    /* ---- FC 0x07 Read Exception Status ---- */
+    /* ---- FC 0x07 Read Exception Status (V1.1b3 §6.7) ---- */
     case MODBUS_FC_READ_EXCEPTION_STATUS: {
         if (rx_pdu_len != 1U) {
             pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_DATA_VALUE, tx_pdu);
             break;
         }
-        /* Pack discrete inputs 0..7 as the 8-bit exception/status field */
-        uint8_t status = 0;
-        for (uint8_t i = 0; i < 8U; i++) {
-            if (modbus_bit_read(discrete_bits, MODBUS_DISCRETE_INPUT_OFFSET + i)) {
-                status |= (uint8_t)(1U << i);
+        /*
+         * Refresh discrete snapshot from debounced DI so status is current
+         * even if the last IO scan lost the mutex. LSB = lowest output ref.
+         */
+        {
+            uint8_t di = digital_inputs_read_all();
+            for (uint8_t i = 0; i < DI_COUNT && i < 8U; i++) {
+                modbus_bit_write(discrete_bits, MODBUS_DISCRETE_INPUT_OFFSET + i,
+                                 (di >> i) & 0x01U);
             }
         }
-        tx_pdu[0] = func_code;
-        tx_pdu[1] = status;
-        pdu_len   = 2;
+        {
+            uint8_t status = 0;
+            for (uint8_t i = 0; i < 8U; i++) {
+                if (modbus_bit_read(discrete_bits, MODBUS_DISCRETE_INPUT_OFFSET + i)) {
+                    status |= (uint8_t)(1U << i);
+                }
+            }
+            tx_pdu[0] = func_code;
+            tx_pdu[1] = status;
+            pdu_len   = 2;
+        }
         break;
     }
 
@@ -774,15 +801,20 @@ modbus_status_t modbus_rtu_process(uint8_t *rx_buf, uint16_t rx_len,
         return MODBUS_OK;
     }
 
+    /* RTU ADU = slave(1) + PDU + CRC(2); serial ADU max 256 ⇒ PDU max 253 */
+    if (tx_pdu_len > 253U || (1U + tx_pdu_len + 2U) > MODBUS_RTU_FRAME_MAX) {
+        return MODBUS_ERROR;
+    }
+
     tx_buf[0] = modbus_slave_id;
     for (uint16_t i = 0; i < tx_pdu_len; i++) {
         tx_buf[1 + i] = tx_pdu[i];
     }
-    uint16_t total_len = 1 + tx_pdu_len;
+    uint16_t total_len = 1U + tx_pdu_len;
     uint16_t tx_crc = modbus_crc16(tx_buf, total_len);
-    tx_buf[total_len]     = tx_crc & 0xFF;
-    tx_buf[total_len + 1] = tx_crc >> 8;
-    *tx_len = total_len + 2;
+    tx_buf[total_len]     = (uint8_t)(tx_crc & 0xFF);
+    tx_buf[total_len + 1] = (uint8_t)(tx_crc >> 8);
+    *tx_len = total_len + 2U;
 
     return MODBUS_OK;
 }

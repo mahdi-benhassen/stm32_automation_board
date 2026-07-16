@@ -68,10 +68,15 @@ static void io_scan_task(void *pvParameters)
 
         uint16_t ai_buf[AI_COUNT];
         analog_inputs_scan_all(ai_buf);
-        for (uint8_t i = 0; i < AI_COUNT; i++) {
-            modbus_write_holding_register(MODBUS_HOLDING_REG_OFFSET + 100 + i, ai_buf[i]);
+
+        /* Serialize Modbus table updates with RTU/TCP PDU processing */
+        if (xSemaphoreTake(modbus_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+            for (uint8_t i = 0; i < AI_COUNT; i++) {
+                modbus_write_holding_register(MODBUS_HOLDING_REG_OFFSET + 100 + i, ai_buf[i]);
+            }
+            modbus_sync_inputs();
+            xSemaphoreGive(modbus_mutex);
         }
-        modbus_sync_inputs();
 
         checkin_io_scan = 1;
         vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(10));
