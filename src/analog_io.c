@@ -42,6 +42,9 @@ void analog_inputs_init(void)
 void analog_inputs_scan_all(uint16_t *buffer)
 {
     for (uint8_t i = 0; i < AI_COUNT; i++) {
+        /* Fallback to last good value if this conversion fails/times out */
+        buffer[i] = ai_raw_values[i];
+
         ADC_ChannelConfTypeDef sConfig = {0};
         uint8_t channel = 0;
 

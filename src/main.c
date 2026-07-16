@@ -23,11 +23,10 @@ static QueueHandle_t rs485_rx_queue = NULL;
 static QueueHandle_t eth_rx_queue = NULL;
 static TimerHandle_t status_led_timer = NULL;
 
-static volatile uint8_t task_checkin = 0;
-#define CHECKIN_IO_SCAN    0x01
-#define CHECKIN_MODBUS_RTU 0x02
-#define CHECKIN_MODBUS_TCP 0x04
-#define CHECKIN_ALL        0x07
+/* Per-task check-ins (byte stores are atomic; avoids RMW races on one flag) */
+static volatile uint8_t checkin_io_scan = 0;
+static volatile uint8_t checkin_modbus_rtu = 0;
+static volatile uint8_t checkin_modbus_tcp = 0;
 
 static void status_led_timer_callback(TimerHandle_t xTimer)
 {
@@ -36,7 +35,7 @@ static void status_led_timer_callback(TimerHandle_t xTimer)
 }
 
 typedef struct {
-    uint8_t data[MODBUS_RTU_FRAME_MAX];
+    uint8_t data[MODBUS_TCP_FRAME_MAX];
     uint16_t len;
 } modbus_frame_t;
 
@@ -54,7 +53,7 @@ static void rs485_modbus_callback(uint8_t *data, uint16_t len)
 static void eth_modbus_callback(uint8_t *data, uint16_t len)
 {
     modbus_frame_t frame;
-    if (len > MODBUS_RTU_FRAME_MAX) len = MODBUS_RTU_FRAME_MAX;
+    if (len > MODBUS_TCP_FRAME_MAX) len = MODBUS_TCP_FRAME_MAX;
     for (uint16_t i = 0; i < len; i++) {
         frame.data[i] = data[i];
     }
@@ -77,7 +76,7 @@ static void io_scan_task(void *pvParameters)
         }
         modbus_sync_inputs();
 
-        task_checkin |= CHECKIN_IO_SCAN;
+        checkin_io_scan = 1;
         vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(10));
     }
 }
@@ -108,7 +107,7 @@ static void modbus_rtu_task(void *pvParameters)
                 }
             }
         }
-        task_checkin |= CHECKIN_MODBUS_RTU;
+        checkin_modbus_rtu = 1;
     }
 }
 
@@ -130,7 +129,7 @@ static void modbus_tcp_task(void *pvParameters)
                 ethernet_send(response, resp_len);
             }
         }
-        task_checkin |= CHECKIN_MODBUS_TCP;
+        checkin_modbus_tcp = 1;
     }
 }
 
@@ -139,8 +138,10 @@ static void watchdog_task(void *pvParameters)
     (void)pvParameters;
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(200));
-        if ((task_checkin & CHECKIN_ALL) == CHECKIN_ALL) {
-            task_checkin = 0;
+        if (checkin_io_scan && checkin_modbus_rtu && checkin_modbus_tcp) {
+            checkin_io_scan = 0;
+            checkin_modbus_rtu = 0;
+            checkin_modbus_tcp = 0;
             __HAL_IWDG_RELOAD_COUNTER(&hiwdg);
         }
     }

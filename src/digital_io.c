@@ -27,21 +27,30 @@ void digital_inputs_init(void)
 
 void digital_inputs_scan(void)
 {
-    uint8_t raw = 0;
+    /* Symmetric integration debounce: 5 samples (~50 ms @ 10 ms scan) each way */
     uint32_t port = DI_PORT->IDR;
+    uint8_t current_states = digital_input_states;
 
     for (uint8_t i = 0; i < DI_COUNT; i++) {
-        if (!(port & di_pins[i])) {
+        uint8_t pin_active = !(port & di_pins[i]);
+
+        if (pin_active) {
             if (di_debounce[i] < 5) {
                 di_debounce[i]++;
-            } else {
-                raw |= (1 << i);
+            }
+            if (di_debounce[i] == 5) {
+                current_states |= (uint8_t)(1U << i);
             }
         } else {
-            di_debounce[i] = 0;
+            if (di_debounce[i] > 0) {
+                di_debounce[i]--;
+            }
+            if (di_debounce[i] == 0) {
+                current_states &= (uint8_t)~(1U << i);
+            }
         }
     }
-    digital_input_states = raw;
+    digital_input_states = current_states;
 }
 
 uint8_t digital_inputs_read_all(void)

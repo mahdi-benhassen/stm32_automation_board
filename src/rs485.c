@@ -17,7 +17,8 @@
  *  - maintain a private 1 ms counter in rs485_on_systick (tick hook), so
  *    USART IRQs above configMAX_SYSCALL_INTERRUPT_PRIORITY never need
  *    FreeRTOS FromISR APIs;
- *  - combine that counter with SysTick->VAL for microsecond resolution.
+ *  - combine that counter with SysTick->VAL for microsecond resolution;
+ *  - use SCB PENDSTSET (not read-to-clear COUNTFLAG) for pending-tick detect.
  *
  * See Modbus over Serial Line V1.02 §2.5.1.1.
  */
@@ -59,8 +60,8 @@ static volatile uint8_t  t35_armed = 0;
  * Free-running microsecond clock from SysTick.
  *
  * Uses rtu_ms_tick (advanced from the FreeRTOS tick hook) + VAL.
- * COUNTFLAG compensates when a tick overflowed but the hook has not run yet.
- * rs485_on_systick() must clear COUNTFLAG when it increments rtu_ms_tick.
+ * PENDSTSET (SCB->ICSR) detects a pending SysTick without the read-to-clear
+ * side effect of SysTick COUNTFLAG, so repeated samples stay monotonic.
  */
 static uint32_t rtu_time_us(void)
 {
@@ -73,8 +74,8 @@ static uint32_t rtu_time_us(void)
     ms   = rtu_ms_tick;
     val  = SysTick->VAL;
     load = SysTick->LOAD;
-    if ((SysTick->CTRL & SysTick_CTRL_COUNTFLAG_Msk) != 0U) {
-        /* Overflow pending: VAL is already in the new period */
+    if ((SCB->ICSR & SCB_ICSR_PENDSTSET_Msk) != 0U) {
+        /* SysTick interrupt pending: VAL is already in the new period */
         ms++;
         val = SysTick->VAL;
     }
@@ -157,11 +158,6 @@ void rs485_on_systick(void)
     uint32_t primask = __get_PRIMASK();
 
     __disable_irq();
-    /*
-     * Clear COUNTFLAG before bumping rtu_ms_tick so rtu_time_us() never
-     * double-counts after the hook has run.
-     */
-    (void)SysTick->CTRL;
     rtu_ms_tick++;
     if (primask == 0U) {
         __enable_irq();
