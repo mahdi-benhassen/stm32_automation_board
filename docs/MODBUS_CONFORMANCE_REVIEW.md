@@ -22,7 +22,8 @@ The first pass compared every implemented request path to the protocol rules. Th
 | RTU framing | Conformant for the configured 8E1 link | `src/rs485.c` uses CRC-16 low-byte-first, T1.5 rejection, and T3.5 frame completion; above 19,200 bit/s it uses the recommended fixed 750/1,750 microsecond timings. |
 | Serial broadcast | Conformant after fixes | Address 0 executes only the implemented write functions and emits no response. |
 | MBAP handling | Conformant after fixes | Protocol ID must be zero; Length must include Unit Identifier and PDU and match the received ADU exactly; the response copies transaction and unit identifiers. |
-| End-to-end Modbus/TCP service | Not yet implemented | The repository has no TCP/IP stack or TCP port-502 listener. `ethernet.c` is a MAC/DMA layer; it cannot turn Ethernet frames into TCP payloads. Integrating lwIP (or equivalent) remains required before claiming Modbus/TCP operation. |
+| End-to-end Modbus/TCP service | Not yet implemented | The repository has no TCP/IP stack or TCP port-502 listener. `ethernet.c` is a MAC/DMA layer; it cannot turn Ethernet frames into TCP payloads. Integrating lwIP (or equivalent) remains required before claiming Modbus/TCP operation. See `INDUSTRIAL_READINESS_REVIEW.md`. |
+| TCP ADU queue sizing | Fixed for future stack | Application queues and eth callback allow full 260-byte Modbus TCP ADUs (`MODBUS_TCP_FRAME_MAX` / `MODBUS_TCP_MAX_ADU`). |
 
 ## Corrections made by this review
 

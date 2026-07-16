@@ -114,13 +114,15 @@ Tags starting with `v` trigger a release with firmware artifacts.
 |----------|--------|
 | Build (CI) | READY — compiles clean, CI green |
 | Code quality | READY — modular, documented, reviewed |
-| Safety (watchdog/PVD/fail-safe) | READY |
-| Modbus RTU | READY — protocol-compliant, buffer-safe |
-| Modbus TCP | NOT READY — requires lwIP integration |
+| Safety (watchdog/PVD/fail-safe) | READY — per-task IWDG check-ins |
+| Firmware hardening | READY — symmetric DI debounce, ADC last-good, RTU timebase, TCP ADU size |
+| Modbus RTU | READY — protocol-compliant, T1.5/T3.5 framing, buffer-safe |
+| Modbus TCP | NOT READY — parser ready; **requires lwIP** for live Ethernet |
 | FreeRTOS | READY — correct config, hooks, priorities |
-| Production deployment | NOT READY — needs bootloader, NVRAM, self-test, certification |
+| Production deployment | NOT READY — needs lwIP, bootloader, NVRAM, self-test, certification |
 
-See [docs/VALIDATION_CHECKLIST.md](docs/VALIDATION_CHECKLIST.md) for full checklist.
+See [docs/INDUSTRIAL_READINESS_REVIEW.md](docs/INDUSTRIAL_READINESS_REVIEW.md) for industrial readiness and roadmap.  
+See [docs/VALIDATION_CHECKLIST.md](docs/VALIDATION_CHECKLIST.md) for full checklist.  
 See [docs/TEST_PLAN.md](docs/TEST_PLAN.md) for bench test procedures.
 
 ## Flashing
