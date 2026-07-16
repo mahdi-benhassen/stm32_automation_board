@@ -168,6 +168,7 @@ void modbus_tcp_server_task(void *pvParameters)
     }
 
     (void)netconn_listen(listen_conn);
+    (void)netconn_set_recvtimeout(listen_conn, 1000);
 
     for (;;) {
         struct netconn *client = NULL;
