@@ -34,11 +34,25 @@ The first pass compared every implemented request path to the protocol rules. Th
 - Enforce Modbus/TCP Protocol Identifier `0`, the MBAP length field, and the 253-byte maximum PDU length.
 - Treat Unit Identifier `0` on TCP as an identifier to echo, not as a serial-line broadcast.
 
+## Extended function codes (issue #3) vs V1.1b3
+
+Reviewed against `Modbus_Application_Protocol_V1_1b3.pdf` §6.7, §6.14–6.15, §6.17, §6.21.
+
+| FC | Spec section | Conformance notes |
+|----|--------------|-------------------|
+| 0x07 | §6.7 | PDU OK (FC + 1 status byte). Device-specific status = discrete inputs 0–7 (LSB = DI0). Spec marks serial-line-only; we also answer on TCP for dual-stack convenience. |
+| 0x14 | §6.14 | Sub-req 7 bytes, ref type 06, byte count 0x07–0xF5. Virtual files 1–4 × 128 regs; record number > 0x270F or out of store → exc 02. |
+| 0x15 | §6.15 | Request data length 0x09–0xFB; response echo of request. Same virtual file store. |
+| 0x17 | §6.17 | Write-before-read; read qty 1–0x007D; write qty 1–0x0079; BC = 2×write. |
+| 0x2B/0x0E | §6.21 | Basic objects 0–2 mandatory strings; conformity **0x81** (basic + individual); stream 01/02/03 and individual 04; unknown stream Object Id restarts at 0; unknown individual Object Id → exc 02. |
+
 ## Residual limitations and next action
 
 This review does not certify the hardware installation or electrical layer. RS-485 termination, biasing, cable topology, EMC, and system-level timing must be verified on the target board.
 
 Modbus/TCP transport is implemented via lwIP (static IP, port 502). On-target Ethernet PHY link, ARP, and multi-client soak tests remain lab work.
+
+File records are a **RAM virtual store** (not a filesystem); device identification is basic-level only (no regular/extended optional objects 0x03–0x06).
 
 ## Verification
 

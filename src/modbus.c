@@ -455,7 +455,7 @@ modbus_status_t modbus_pdu_process(uint8_t *rx_pdu, uint16_t rx_pdu_len,
         break;
     }
 
-    /* ---- FC 0x14 Read File Record ---- */
+    /* ---- FC 0x14 Read File Record (V1.1b3 §6.14) ---- */
     case MODBUS_FC_READ_FILE_RECORD: {
         if (rx_pdu_len < 2U) {
             pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_DATA_VALUE, tx_pdu);
@@ -463,7 +463,9 @@ modbus_status_t modbus_pdu_process(uint8_t *rx_pdu, uint16_t rx_pdu_len,
         }
         {
             uint8_t req_byte_count = rx_pdu[1];
-            if (req_byte_count < 7U || (req_byte_count % 7U) != 0U ||
+            /* Spec: Byte Count 0x07..0xF5, and must be multiple of 7 (sub-request size) */
+            if (req_byte_count < 0x07U || req_byte_count > 0xF5U ||
+                (req_byte_count % 7U) != 0U ||
                 rx_pdu_len != (uint16_t)(2U + req_byte_count)) {
                 pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_DATA_VALUE, tx_pdu);
                 break;
@@ -480,27 +482,30 @@ modbus_status_t modbus_pdu_process(uint8_t *rx_pdu, uint16_t rx_pdu_len,
                 uint16_t record_number = ((uint16_t)rx_pdu[off + 3] << 8) | rx_pdu[off + 4];
                 uint16_t record_length = ((uint16_t)rx_pdu[off + 5] << 8) | rx_pdu[off + 6];
 
-                if (ref_type != MODBUS_FILE_REF_TYPE) {
+                if (ref_type != MODBUS_FILE_REF_TYPE || record_length < 1U) {
                     pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_DATA_VALUE, tx_pdu);
                     ok = 0;
                     break;
                 }
-                if (!modbus_file_index_valid(file_number) ||
+                /* Spec record number 0x0000..0x270F; unsupported file/range → address error */
+                if (record_number > 0x270FU ||
+                    !modbus_file_index_valid(file_number) ||
                     !modbus_file_range_valid(record_number, record_length)) {
                     pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_DATA_ADDRESS, tx_pdu);
                     ok = 0;
                     break;
                 }
-                /* File resp length + ref type + data; keep within PDU budget */
+                /* Sub-response: File resp length + Ref Type + data (max PDU 253) */
                 uint16_t need = (uint16_t)(1U + 1U + record_length * 2U);
-                if ((out + need) > (MODBUS_RTU_FRAME_MAX - 4U)) {
+                if ((out + need) > 253U) {
                     pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_DATA_VALUE, tx_pdu);
                     ok = 0;
                     break;
                 }
 
                 uint8_t file_idx = (uint8_t)(file_number - 1U);
-                tx_pdu[out++] = (uint8_t)(1U + record_length * 2U); /* sub-resp length */
+                /* File resp length = ref type (1) + register data (2*N) */
+                tx_pdu[out++] = (uint8_t)(1U + record_length * 2U);
                 tx_pdu[out++] = MODBUS_FILE_REF_TYPE;
                 for (uint16_t r = 0; r < record_length; r++) {
                     uint16_t val = file_store[file_idx][record_number + r];
@@ -518,7 +523,7 @@ modbus_status_t modbus_pdu_process(uint8_t *rx_pdu, uint16_t rx_pdu_len,
         break;
     }
 
-    /* ---- FC 0x15 Write File Record ---- */
+    /* ---- FC 0x15 Write File Record (V1.1b3 §6.15) ---- */
     case MODBUS_FC_WRITE_FILE_RECORD: {
         if (rx_pdu_len < 2U) {
             pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_DATA_VALUE, tx_pdu);
@@ -526,7 +531,9 @@ modbus_status_t modbus_pdu_process(uint8_t *rx_pdu, uint16_t rx_pdu_len,
         }
         {
             uint8_t req_byte_count = rx_pdu[1];
-            if (req_byte_count < 9U || rx_pdu_len != (uint16_t)(2U + req_byte_count)) {
+            /* Spec: Request data length 0x09..0xFB */
+            if (req_byte_count < 0x09U || req_byte_count > 0xFBU ||
+                rx_pdu_len != (uint16_t)(2U + req_byte_count)) {
                 pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_DATA_VALUE, tx_pdu);
                 break;
             }
@@ -546,12 +553,13 @@ modbus_status_t modbus_pdu_process(uint8_t *rx_pdu, uint16_t rx_pdu_len,
                 uint16_t record_length = ((uint16_t)rx_pdu[pos + 5] << 8) | rx_pdu[pos + 6];
                 uint16_t data_bytes    = (uint16_t)(record_length * 2U);
 
-                if (ref_type != MODBUS_FILE_REF_TYPE) {
+                if (ref_type != MODBUS_FILE_REF_TYPE || record_length < 1U) {
                     pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_DATA_VALUE, tx_pdu);
                     ok = 0;
                     break;
                 }
-                if (!modbus_file_index_valid(file_number) ||
+                if (record_number > 0x270FU ||
+                    !modbus_file_index_valid(file_number) ||
                     !modbus_file_range_valid(record_number, record_length)) {
                     pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_DATA_ADDRESS, tx_pdu);
                     ok = 0;
@@ -583,7 +591,7 @@ modbus_status_t modbus_pdu_process(uint8_t *rx_pdu, uint16_t rx_pdu_len,
         break;
     }
 
-    /* ---- FC 0x17 Read/Write Multiple Registers ---- */
+    /* ---- FC 0x17 Read/Write Multiple Registers (V1.1b3 §6.17) ---- */
     case MODBUS_FC_READ_WRITE_MULTIPLE_REGS: {
         if (rx_pdu_len < 10U) {
             pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_DATA_VALUE, tx_pdu);
@@ -596,8 +604,9 @@ modbus_status_t modbus_pdu_process(uint8_t *rx_pdu, uint16_t rx_pdu_len,
             uint16_t write_qty   = ((uint16_t)rx_pdu[7] << 8) | rx_pdu[8];
             uint8_t  write_bc    = rx_pdu[9];
 
-            if (read_qty < 1U || read_qty > MODBUS_MAX_READ_REGISTERS ||
-                write_qty < 1U || write_qty > MODBUS_MAX_RW_WRITE_REGS ||
+            /* Spec: read qty 1..0x007D (125), write qty 1..0x0079 (121), BC == 2*write */
+            if (read_qty < 1U || read_qty > 0x007DU ||
+                write_qty < 1U || write_qty > 0x0079U ||
                 write_bc != (uint8_t)(write_qty * 2U) ||
                 rx_pdu_len != (uint16_t)(10U + write_bc)) {
                 pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_DATA_VALUE, tx_pdu);
@@ -628,7 +637,7 @@ modbus_status_t modbus_pdu_process(uint8_t *rx_pdu, uint16_t rx_pdu_len,
         break;
     }
 
-    /* ---- FC 0x2B / MEI 0x0E Read Device Identification ---- */
+    /* ---- FC 0x2B / MEI 0x0E Read Device Identification (V1.1b3 §6.21) ---- */
     case MODBUS_FC_ENCAPSULATED_INTERFACE: {
         if (rx_pdu_len < 4U) {
             pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_DATA_VALUE, tx_pdu);
@@ -643,47 +652,60 @@ modbus_status_t modbus_pdu_process(uint8_t *rx_pdu, uint16_t rx_pdu_len,
                 pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_FUNCTION, tx_pdu);
                 break;
             }
-            /* Support basic stream (0x01) and individual access (0x04) for objects 0..2 */
+            /* Illegal Read Device ID code → exception 03 */
             if (read_dev_id != MODBUS_DEVID_BASIC &&
                 read_dev_id != MODBUS_DEVID_REGULAR &&
+                read_dev_id != MODBUS_DEVID_EXTENDED &&
                 read_dev_id != MODBUS_DEVID_SPECIFIC) {
                 pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_DATA_VALUE, tx_pdu);
                 break;
             }
 
-            uint8_t first_obj = 0;
-            uint8_t last_obj  = 2; /* basic: VendorName, ProductCode, MajorMinorRevision */
+            uint8_t first_obj;
+            uint8_t last_obj;
+            uint8_t more_follows = 0x00;
+            uint8_t next_obj_id  = 0x00;
 
             if (read_dev_id == MODBUS_DEVID_SPECIFIC) {
+                /* Individual access: unknown object → exception 02 */
                 if (object_id > 2U) {
                     pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_DATA_ADDRESS, tx_pdu);
                     break;
                 }
                 first_obj = object_id;
                 last_obj  = object_id;
-            } else if (object_id > 2U) {
-                /* stream starting object beyond basic set */
-                pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_DATA_ADDRESS, tx_pdu);
-                break;
-            } else if (read_dev_id == MODBUS_DEVID_BASIC || read_dev_id == MODBUS_DEVID_REGULAR) {
-                first_obj = object_id;
-                last_obj  = 2;
+                more_follows = 0x00; /* mandatory for code 04 */
+                next_obj_id  = 0x00;
+            } else {
+                /*
+                 * Stream access (01/02/03): we only implement basic objects 0..2.
+                 * Spec: if asked for a higher level than supported, respond at
+                 * actual conformity level. Unknown Object Id → restart at 0.
+                 */
+                first_obj = (object_id <= 2U) ? object_id : 0U;
+                last_obj  = 2U;
+                more_follows = 0x00;
+                next_obj_id  = 0x00;
             }
 
+            /*
+             * Conformity 0x81 = basic identification + individual access.
+             * (We implement objects 0..2 and ReadDevId codes 01 and 04.)
+             */
             tx_pdu[0] = func_code;
             tx_pdu[1] = MODBUS_MEI_READ_DEVICE_ID;
-            tx_pdu[2] = read_dev_id;
-            tx_pdu[3] = 0x01; /* conformity level: basic identification */
-            tx_pdu[4] = 0x00; /* More Follows = no */
-            tx_pdu[5] = 0x00; /* Next Object Id */
-            tx_pdu[6] = (uint8_t)(last_obj - first_obj + 1U); /* Number of Objects */
+            tx_pdu[2] = read_dev_id; /* echo request code */
+            tx_pdu[3] = 0x81;
+            tx_pdu[4] = more_follows;
+            tx_pdu[5] = next_obj_id;
+            tx_pdu[6] = (uint8_t)(last_obj - first_obj + 1U);
 
             uint16_t out = 7;
             uint8_t ok = 1;
             for (uint8_t oid = first_obj; oid <= last_obj; oid++) {
                 uint8_t slen = 0;
                 const char *s = modbus_devid_object_str(oid, &slen);
-                if (s == NULL || (out + 2U + slen) > (MODBUS_RTU_FRAME_MAX - 4U)) {
+                if (s == NULL || (out + 2U + slen) > 253U) {
                     pdu_len = modbus_exception_response(func_code, MODBUS_EXC_SLAVE_DEVICE_FAILURE, tx_pdu);
                     ok = 0;
                     break;
