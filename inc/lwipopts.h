@@ -24,8 +24,9 @@
 #define MEMP_NUM_SYS_TIMEOUT            8
 #define MEMP_NUM_NETBUF                 8
 #define MEMP_NUM_NETCONN                8
-#define PBUF_POOL_SIZE                  12
-#define PBUF_POOL_BUFSIZE               512
+/* Pool must cover TCP_WND (lwIP sanity check at init) */
+#define PBUF_POOL_SIZE                  16
+#define PBUF_POOL_BUFSIZE               640
 
 /* ---------- IPv4 / ARP / ICMP ---------- */
 #define LWIP_IPV4                       1
@@ -39,12 +40,12 @@
 #define LWIP_DNS                        0
 #define LWIP_IGMP                       0
 
-/* ---------- TCP ---------- */
+/* ---------- TCP (Modbus ADU ≤ 260 B — modest MSS/window) ---------- */
 #define LWIP_TCP                        1
-#define TCP_MSS                         1460
+#define TCP_MSS                         536
 #define TCP_WND                         (4 * TCP_MSS)
-#define TCP_SND_BUF                     (4 * TCP_MSS)
-#define TCP_SND_QUEUELEN                (2 * TCP_SND_BUF / TCP_MSS)
+#define TCP_SND_BUF                     (2 * TCP_MSS)
+#define TCP_SND_QUEUELEN                (4 * TCP_SND_BUF / TCP_MSS)
 #define TCP_LISTEN_BACKLOG              1
 #define LWIP_TCP_KEEPALIVE              1
 
