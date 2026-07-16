@@ -11,12 +11,40 @@ Industrial automation controller based on STM32F407 with Ethernet, RS485, and Mo
 - **4 Relays** with individual LED status indicators
 - **RS485** half-duplex interface with DE/RE direction control (8E1, Modbus-compliant)
 - **Ethernet** 10/100M RMII with built-in MAC (external PHY: LAN8720/DP83848)
-- **Modbus RTU** (slave) over RS485
+- **Modbus RTU** dual-role over RS485: **slave** (always on) + **master** API (shares the bus)
 - **Modbus TCP** slave over Ethernet (lwIP, static IP, TCP port 502)
+- **Extended Modbus FCs**: 0x07, 0x14, 0x15, 0x17, 0x2B/0x0E (slave + master)
 - **FreeRTOS V11** real-time OS with preemptive scheduler
 - **IWDG watchdog** with per-task check-in monitoring
 - **PVD brown-out detection** at 2.9V threshold
 - **Buffer overflow protection** on Modbus register reads (max 125 registers)
+
+## Modbus RTU Master API
+
+The board remains an RTU **slave** by default. After boot, the **master** transport is bound to the same RS485 port (`modbus_master_rtu_init` in `main`). Call the high-level APIs from any FreeRTOS task; the master takes the bus mutex for one transaction and routes the response away from the slave queue.
+
+```c
+#include "modbus_master.h"
+
+uint16_t regs[4];
+uint8_t  exc = 0;
+modbus_status_t st;
+
+/* Classic read */
+st = modbus_master_read_holding_registers(/*slave*/2, /*start*/0, /*qty*/4, regs, &exc);
+
+/* Extended FCs */
+uint8_t status;
+st = modbus_master_read_exception_status(2, &status, &exc);
+
+uint16_t file_regs[8];
+st = modbus_master_read_file_record(2, /*file*/1, /*rec*/0, /*len*/8, file_regs, &exc);
+
+modbus_master_devid_t id;
+st = modbus_master_read_device_identification(2, MODBUS_DEVID_BASIC, 0, &id, &exc);
+```
+
+Supported master function codes: **0x01–0x07, 0x0F, 0x10, 0x14, 0x15, 0x17, 0x2B/0x0E**.
 
 ## Modbus Register Map
 

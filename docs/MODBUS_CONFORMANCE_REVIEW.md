@@ -67,6 +67,25 @@ File records are a **RAM virtual store** (not a filesystem); device identificati
 
 Both branches share the same `modbus_pdu_process` core for the extended FCs.
 
+## Modbus RTU master (client)
+
+| Item | Notes |
+|------|-------|
+| Module | `src/modbus_master.c` + FreeRTOS/RS485 glue `src/modbus_master_rtu.c` |
+| Role | Dual-role: slave remains default RX path; master takes `rs485_tx_mutex` and routes response frames to a dedicated queue while a transaction is armed |
+| FCs | Master builders/parsers for 0x01–0x06, 0x07, 0x0F, 0x10, 0x14, 0x15, 0x17, 0x2B/0x0E |
+| Broadcast | Slave address 0: write FCs send ADU and expect no response |
+| API | High-level `modbus_master_read_*` / `write_*` / file / device-id; low-level `modbus_master_transaction()` |
+| Transport | Injectable `modbus_master_transport_t` (unit-testable without UART) |
+
+Application code calls master APIs from any FreeRTOS task after `modbus_master_rtu_init()` (done in `main`). Example:
+
+```c
+uint16_t regs[4];
+uint8_t exc = 0;
+modbus_status_t st = modbus_master_read_holding_registers(2, 0, 4, regs, &exc);
+```
+
 ## Verification
 
 - `git diff --check` passed.

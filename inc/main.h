@@ -19,6 +19,8 @@
 #include "rs485.h"
 #include "ethernet.h"
 #include "modbus.h"
+#include "modbus_master.h"
+#include "modbus_master_rtu.h"
 #include "modbus_tcp.h"
 #include "modbus_tcp_server.h"
 #include "net_init.h"

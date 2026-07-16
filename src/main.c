@@ -1,5 +1,6 @@
 #include "main.h"
 #include "modbus_tcp_server.h"
+#include "modbus_master_rtu.h"
 
 uint32_t HAL_GetTick(void)
 {
@@ -34,15 +35,12 @@ static void status_led_timer_callback(TimerHandle_t xTimer)
     HAL_GPIO_TogglePin(STATUS_LED_PORT, STATUS_LED_PIN);
 }
 
-/* RTU frames only in this queue (TCP uses lwIP netconn server) */
-typedef struct {
-    uint8_t data[MODBUS_RTU_FRAME_MAX];
-    uint16_t len;
-} modbus_frame_t;
+/* RTU frames: slave path uses rs485_rx_queue; master uses master_rx_queue */
+static QueueHandle_t master_rx_queue = NULL;
 
 static void rs485_modbus_callback(uint8_t *data, uint16_t len)
 {
-    modbus_frame_t frame;
+    modbus_rtu_frame_t frame;
     if (len > MODBUS_RTU_FRAME_MAX) {
         len = MODBUS_RTU_FRAME_MAX;
     }
@@ -50,7 +48,16 @@ static void rs485_modbus_callback(uint8_t *data, uint16_t len)
         frame.data[i] = data[i];
     }
     frame.len = len;
-    (void)xQueueSend(rs485_rx_queue, &frame, 0);
+
+    /*
+     * While a master transaction is armed, deliver the ADU to the master
+     * response queue so the slave task does not treat it as a request.
+     */
+    if (modbus_master_rtu_is_waiting() && master_rx_queue) {
+        (void)xQueueSend(master_rx_queue, &frame, 0);
+    } else if (rs485_rx_queue) {
+        (void)xQueueSend(rs485_rx_queue, &frame, 0);
+    }
 }
 
 static void tcp_watchdog_checkin(void)
@@ -86,14 +93,17 @@ static void io_scan_task(void *pvParameters)
 static void modbus_rtu_task(void *pvParameters)
 {
     (void)pvParameters;
-    modbus_frame_t rx_frame;
+    modbus_rtu_frame_t rx_frame;
     uint8_t response[MODBUS_RTU_FRAME_MAX];
     uint16_t resp_len = 0;
 
     for (;;) {
         /* Poll framing often enough for T3.5 end-of-frame (sub-ms at high baud) */
         rs485_process();
-        if (xQueueReceive(rs485_rx_queue, &rx_frame, pdMS_TO_TICKS(1)) == pdTRUE) {
+        /* Skip slave handling while master owns the bus (responses go to master queue) */
+        if (modbus_master_rtu_is_waiting()) {
+            vTaskDelay(pdMS_TO_TICKS(1));
+        } else if (xQueueReceive(rs485_rx_queue, &rx_frame, pdMS_TO_TICKS(1)) == pdTRUE) {
             xSemaphoreTake(modbus_mutex, portMAX_DELAY);
             resp_len = 0;
             modbus_rtu_process(rx_frame.data, rx_frame.len, response, &resp_len);
@@ -224,9 +234,10 @@ int main(void)
 
     rs485_tx_mutex = xSemaphoreCreateMutex();
     modbus_mutex   = xSemaphoreCreateMutex();
-    rs485_rx_queue = xQueueCreate(8, sizeof(modbus_frame_t));
+    rs485_rx_queue = xQueueCreate(8, sizeof(modbus_rtu_frame_t));
+    master_rx_queue = xQueueCreate(4, sizeof(modbus_rtu_frame_t));
 
-    if (!rs485_tx_mutex || !modbus_mutex || !rs485_rx_queue) {
+    if (!rs485_tx_mutex || !modbus_mutex || !rs485_rx_queue || !master_rx_queue) {
         __disable_irq();
         for (;;) {
             __NOP();
@@ -234,6 +245,8 @@ int main(void)
     }
 
     rs485_set_rx_callback(rs485_modbus_callback);
+    /* Dual-role RS485: slave remains active; master API shares the bus */
+    modbus_master_rtu_init(rs485_tx_mutex, master_rx_queue);
     modbus_tcp_server_set_checkin(tcp_watchdog_checkin);
 
     GPIO_InitTypeDef status_led = {0};
