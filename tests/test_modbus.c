@@ -1507,7 +1507,7 @@ static void test_mask_write_broadcast_executes(void)
 static void test_mask_write_tcp_accepted(void)
 {
     /* MBAP len = unit(1) + PDU(7) = 8; PDU = 16 00 04 00 F2 00 25 */
-    uint8_t rx16[15] = {0x00, 0x01, 0x00, 0x00, 0x00, 0x08, 0x01,
+    uint8_t rx16[14] = {0x00, 0x01, 0x00, 0x00, 0x00, 0x08, 0x01,
                         0x16, 0x00, 0x04, 0x00, 0xF2, 0x00, 0x25};
     uint8_t tx[MODBUS_TCP_MAX_ADU];
     uint16_t tx_len = 0;
@@ -1640,7 +1640,7 @@ static void test_fifo_broadcast_dropped(void)
 static void test_fifo_tcp_accepted(void)
 {
     /* MBAP len = unit(1) + PDU(3) = 4; PDU = 18 00 00 */
-    uint8_t rx18[11] = {0x00, 0x01, 0x00, 0x00, 0x00, 0x04, 0x01,
+    uint8_t rx18[10] = {0x00, 0x01, 0x00, 0x00, 0x00, 0x04, 0x01,
                         0x18, 0x00, 0x00};
     uint8_t tx[MODBUS_TCP_MAX_ADU];
     uint16_t tx_len = 0;
