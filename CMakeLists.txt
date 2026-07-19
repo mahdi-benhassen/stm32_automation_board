@@ -57,6 +57,7 @@ set(APP_SOURCES
     "src/relay.c"
     "src/rs485.c"
     "src/rs232.c"
+    "src/rtu_framer.c"
     "src/ethernet.c"
     "src/ethernetif.c"
     "src/net_init.c"
