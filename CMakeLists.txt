@@ -63,6 +63,7 @@ set(APP_SOURCES
     "src/ethernet.c"
     "src/modbus.c"
     "src/modbus_diag.c"
+    "src/modbus_event.c"
     "src/modbus_master.c"
     "src/modbus_master_rtu.c"
     "src/modbus_tcp.c"

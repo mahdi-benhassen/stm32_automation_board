@@ -5,7 +5,7 @@
  *   gcc -Wall -Wextra -Itests -Iinc -o test_modbus \
  *       tests/test_modbus.c tests/modbus_crc_standalone.c \
  *       tests/modbus_host_stubs.c \
- *       src/modbus.c src/modbus_diag.c src/modbus_master.c src/modbus_tcp.c
+ *       src/modbus.c src/modbus_diag.c src/modbus_event.c src/modbus_master.c src/modbus_tcp.c
  */
 #include "modbus_test_config.h"
 #include <stdio.h>
@@ -929,6 +929,374 @@ static void test_master_diag_exception_round_trip(void)
 }
 
 /* ============================================================
+ * FC 0x0B / 0x0C Comm Event Counter / Log — slave (issue #10)
+ * Tests drive the REAL modbus_rtu_process() interception path.
+ * ============================================================ */
+
+/* Send one FC 0x0B/0x0C request (FC-only PDU) through the real slave. */
+static modbus_status_t event_request(uint8_t slave, uint8_t fc,
+                                     uint8_t *tx, uint16_t *tx_len)
+{
+    uint8_t pdu[1] = {fc};
+    uint8_t adu[4];
+    uint16_t adu_len = rtu_build_adu(slave, pdu, 1, adu);
+    return modbus_rtu_process(adu, adu_len, tx, tx_len);
+}
+
+/* One FC 0x03 read of 1 holding register through the real slave. */
+static void event_do_fc03(uint8_t slave, uint8_t *tx, uint16_t *tx_len)
+{
+    uint8_t pdu03[5] = {MODBUS_FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01};
+    uint8_t adu[16];
+    uint16_t adu_len = rtu_build_adu(slave, pdu03, 5, adu);
+    (void)modbus_rtu_process(adu, adu_len, tx, tx_len);
+}
+
+static void test_event_counter_response_and_rules(void)
+{
+    uint8_t tx[MODBUS_RTU_FRAME_MAX];
+    uint16_t tx_len = 0;
+    uint8_t pdu_bad[1] = {0x42}; /* unknown FC -> exception 01 */
+    uint8_t adu[16];
+    uint16_t adu_len;
+    TEST("0x0B layout; counter++ on success, not on exception or fetch");
+    modbus_rtu_init(1);
+
+    /* Fresh after init: status 0x0000, event count 0 */
+    ASSERT_EQ(event_request(1, MODBUS_FC_GET_COMM_EVENT_COUNTER, tx, &tx_len),
+              MODBUS_OK);
+    ASSERT_EQ(tx_len, 8); /* slave + 5-byte PDU + CRC */
+    ASSERT_EQ(tx[0], 1);
+    ASSERT_EQ(tx[1], 0x0B);
+    ASSERT_EQ(tx[2], 0x00); /* status hi */
+    ASSERT_EQ(tx[3], 0x00); /* status lo: no busy state in this firmware */
+    ASSERT_EQ(tx[4], 0x00); /* event count hi */
+    ASSERT_EQ(tx[5], 0x00); /* event count lo */
+
+    /* Successful normal FC: +1 */
+    event_do_fc03(1, tx, &tx_len);
+    ASSERT_EQ(event_request(1, MODBUS_FC_GET_COMM_EVENT_COUNTER, tx, &tx_len),
+              MODBUS_OK);
+    ASSERT_EQ((tx[4] << 8) | tx[5], 1);
+
+    /* Exception response: NOT counted */
+    adu_len = rtu_build_adu(1, pdu_bad, 1, adu);
+    ASSERT_EQ(modbus_rtu_process(adu, adu_len, tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(tx[1], 0xC2);
+    ASSERT_EQ(event_request(1, MODBUS_FC_GET_COMM_EVENT_COUNTER, tx, &tx_len),
+              MODBUS_OK);
+    ASSERT_EQ((tx[4] << 8) | tx[5], 1); /* unchanged: exception + fetch */
+
+    /* Successful FC 0x08 echo also counts as a normal completion */
+    ASSERT_EQ(diag_request(1, MODBUS_DIAG_SUB_RETURN_QUERY_DATA, 0xAAAA,
+                           tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(event_request(1, MODBUS_FC_GET_COMM_EVENT_COUNTER, tx, &tx_len),
+              MODBUS_OK);
+    ASSERT_EQ((tx[4] << 8) | tx[5], 2);
+    PASS();
+}
+
+static void test_event_counter_broadcast_rules(void)
+{
+    uint8_t tx[MODBUS_RTU_FRAME_MAX];
+    uint16_t tx_len = 0;
+    uint8_t pdu06[5] = {MODBUS_FC_WRITE_SINGLE_REGISTER, 0x00, 0x00, 0x12, 0x34};
+    uint8_t pdu_bad[1] = {0x42};
+    uint8_t adu[16];
+    uint16_t adu_len;
+    TEST("broadcast write counts; broadcast 0x0B/0x0C silently ignored");
+    modbus_rtu_init(1);
+
+    /* Broadcast write that executes silently: successful completion (+1) */
+    adu_len = rtu_build_adu(0, pdu06, 5, adu);
+    ASSERT_EQ(modbus_rtu_process(adu, adu_len, tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(tx_len, 0);
+
+    /* Broadcast 0x0B / 0x0C: no response, not broadcast-executable */
+    ASSERT_EQ(event_request(0, MODBUS_FC_GET_COMM_EVENT_COUNTER, tx, &tx_len),
+              MODBUS_OK);
+    ASSERT_EQ(tx_len, 0);
+    ASSERT_EQ(event_request(0, MODBUS_FC_GET_COMM_EVENT_LOG, tx, &tx_len),
+              MODBUS_OK);
+    ASSERT_EQ(tx_len, 0);
+
+    /* Broadcast of an unknown FC: exception suppressed AND not counted */
+    adu_len = rtu_build_adu(0, pdu_bad, 1, adu);
+    ASSERT_EQ(modbus_rtu_process(adu, adu_len, tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(tx_len, 0);
+
+    /* Only the broadcast write was counted */
+    ASSERT_EQ(event_request(1, MODBUS_FC_GET_COMM_EVENT_COUNTER, tx, &tx_len),
+              MODBUS_OK);
+    ASSERT_EQ((tx[4] << 8) | tx[5], 1);
+    PASS();
+}
+
+static void test_event_counter_reset_by_diag(void)
+{
+    uint8_t tx[MODBUS_RTU_FRAME_MAX];
+    uint16_t tx_len = 0;
+    TEST("event counter reset by FC 0x08 clear counters (sub 0x0A)");
+    modbus_rtu_init(1);
+    event_do_fc03(1, tx, &tx_len);
+    ASSERT_EQ(event_request(1, MODBUS_FC_GET_COMM_EVENT_COUNTER, tx, &tx_len),
+              MODBUS_OK);
+    ASSERT_EQ((tx[4] << 8) | tx[5], 1);
+    /* Clear counters resets the event counter; the clear itself is not counted */
+    ASSERT_EQ(diag_request(1, MODBUS_DIAG_SUB_CLEAR_COUNTERS, 0x0000,
+                           tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(event_request(1, MODBUS_FC_GET_COMM_EVENT_COUNTER, tx, &tx_len),
+              MODBUS_OK);
+    ASSERT_EQ((tx[4] << 8) | tx[5], 0);
+    PASS();
+}
+
+static void test_event_log_layout_after_reset(void)
+{
+    uint8_t tx[MODBUS_RTU_FRAME_MAX];
+    uint16_t tx_len = 0;
+    TEST("0x0C layout: byte count 6+N, restart event present after reset");
+    modbus_rtu_init(1);
+    ASSERT_EQ(event_request(1, MODBUS_FC_GET_COMM_EVENT_LOG, tx, &tx_len),
+              MODBUS_OK);
+    ASSERT_EQ(tx_len, 12); /* slave + PDU(8+1 event) + CRC */
+    ASSERT_EQ(tx[0], 1);
+    ASSERT_EQ(tx[1], 0x0C);
+    ASSERT_EQ(tx[2], 7);    /* byte count = 6 + 1 event */
+    ASSERT_EQ(tx[3], 0x00); /* status hi */
+    ASSERT_EQ(tx[4], 0x00); /* status lo */
+    ASSERT_EQ(tx[5], 0x00); /* event count hi */
+    ASSERT_EQ(tx[6], 0x00); /* event count lo: 0 after init */
+    ASSERT_EQ(tx[7], 0x00); /* message count hi */
+    ASSERT_EQ(tx[8], 0x01); /* message count lo: this request is slave msg #1 */
+    ASSERT_EQ(tx[9], MODBUS_EVENT_RESTART); /* power-up restart event */
+    PASS();
+}
+
+static void test_event_log_listen_only_recorded(void)
+{
+    uint8_t tx[MODBUS_RTU_FRAME_MAX];
+    uint16_t tx_len = 0;
+    TEST("0x0C log records listen-only-entered (0x04) and restart (0x00)");
+    modbus_rtu_init(1);
+
+    /* Enter listen-only (silent), then escape via Restart Comm (also silent) */
+    ASSERT_EQ(diag_request(1, MODBUS_DIAG_SUB_FORCE_LISTEN_ONLY, 0x0000,
+                           tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(tx_len, 0);
+    ASSERT_EQ(diag_request(1, MODBUS_DIAG_SUB_RESTART_COMM, 0x0000,
+                           tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(tx_len, 0);
+
+    ASSERT_EQ(event_request(1, MODBUS_FC_GET_COMM_EVENT_LOG, tx, &tx_len),
+              MODBUS_OK);
+    ASSERT_EQ(tx[2], 9); /* 6 + 3 events */
+    ASSERT_EQ(tx[9], MODBUS_EVENT_RESTART);           /* most recent: restart */
+    ASSERT_EQ(tx[10], MODBUS_EVENT_ENTER_LISTEN_ONLY); /* then listen-only */
+    ASSERT_EQ(tx[11], MODBUS_EVENT_RESTART);           /* then power-up */
+    PASS();
+}
+
+static void test_event_log_comm_error_recorded(void)
+{
+    uint8_t tx[MODBUS_RTU_FRAME_MAX];
+    uint16_t tx_len = 0;
+    uint8_t pdu03[5] = {MODBUS_FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01};
+    uint8_t adu[16];
+    uint16_t adu_len;
+    TEST("0x0C log records comm-error receive events (CRC + overrun)");
+    modbus_rtu_init(1);
+
+    /* Bad-CRC frame: comm-error receive event 0x80|0x02 */
+    adu_len = rtu_build_adu(1, pdu03, 5, adu);
+    adu[adu_len - 1] ^= 0xFFU;
+    ASSERT_EQ(modbus_rtu_process(adu, adu_len, tx, &tx_len), MODBUS_CRC_ERROR);
+
+    /* UART overrun hook: comm-error + character-overrun bits */
+    modbus_diag_note_char_overrun();
+
+    ASSERT_EQ(event_request(1, MODBUS_FC_GET_COMM_EVENT_LOG, tx, &tx_len),
+              MODBUS_OK);
+    ASSERT_EQ(tx[2], 9); /* 6 + 3 events */
+    ASSERT_EQ(tx[9], MODBUS_EVENT_RX | MODBUS_EVENT_RX_COMM_ERROR |
+                     MODBUS_EVENT_RX_CHAR_OVERRUN);       /* 0x92, most recent */
+    ASSERT_EQ(tx[10], MODBUS_EVENT_RX | MODBUS_EVENT_RX_COMM_ERROR); /* 0x82 */
+    ASSERT_EQ(tx[11], MODBUS_EVENT_RESTART);
+    PASS();
+}
+
+static void test_event_log_send_events(void)
+{
+    uint8_t tx[MODBUS_RTU_FRAME_MAX];
+    uint16_t tx_len = 0;
+    uint8_t pdu_bad[1] = {0x42};
+    uint8_t adu[16];
+    uint16_t adu_len;
+    TEST("0x0C log records send events (0x40 normal, 0x41 exception 01)");
+    modbus_rtu_init(1);
+
+    event_do_fc03(1, tx, &tx_len);                 /* normal response -> 0x40 */
+    adu_len = rtu_build_adu(1, pdu_bad, 1, adu);   /* exception 01 -> 0x41 */
+    ASSERT_EQ(modbus_rtu_process(adu, adu_len, tx, &tx_len), MODBUS_OK);
+
+    ASSERT_EQ(event_request(1, MODBUS_FC_GET_COMM_EVENT_LOG, tx, &tx_len),
+              MODBUS_OK);
+    ASSERT_EQ(tx[2], 9); /* 6 + 3 events */
+    ASSERT_EQ(tx[9], MODBUS_EVENT_TX | MODBUS_EVENT_TX_READ_EXC); /* 0x41 */
+    ASSERT_EQ(tx[10], MODBUS_EVENT_TX);                            /* 0x40 */
+    ASSERT_EQ(tx[11], MODBUS_EVENT_RESTART);
+    PASS();
+}
+
+static void test_event_fetch_rejects_extra_data(void)
+{
+    uint8_t tx[MODBUS_RTU_FRAME_MAX];
+    uint16_t tx_len = 0;
+    uint8_t pdu[2] = {MODBUS_FC_GET_COMM_EVENT_COUNTER, 0x00};
+    uint8_t adu[8];
+    uint16_t adu_len;
+    TEST("0x0B with trailing data -> exception 03 (illegal data value)");
+    modbus_rtu_init(1);
+    adu_len = rtu_build_adu(1, pdu, 2, adu);
+    ASSERT_EQ(modbus_rtu_process(adu, adu_len, tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(tx_len, 5);
+    ASSERT_EQ(tx[1], 0x8B);
+    ASSERT_EQ(tx[2], MODBUS_EXC_ILLEGAL_DATA_VALUE);
+    PASS();
+}
+
+/* ============================================================
+ * FC 0x0B / 0x0C — master side (loopback through real slave)
+ * ============================================================ */
+
+static void test_master_build_parse_event_counter(void)
+{
+    uint8_t pdu[8];
+    uint16_t status = 0;
+    uint16_t count = 0;
+    TEST("master build/parse FC 0x0B round-trip");
+    ASSERT_EQ(modbus_master_build_get_comm_event_counter(pdu, sizeof(pdu)), 1);
+    ASSERT_EQ(pdu[0], 0x0B);
+    /* Spec example response: status 0xFFFF (busy), count 264 */
+    pdu[0] = 0x0B; pdu[1] = 0xFF; pdu[2] = 0xFF; pdu[3] = 0x01; pdu[4] = 0x08;
+    ASSERT_EQ(modbus_master_parse_get_comm_event_counter(pdu, 5, &status, &count),
+              MODBUS_OK);
+    ASSERT_EQ(status, 0xFFFF);
+    ASSERT_EQ(count, 264);
+    /* wrong FC / wrong length rejected */
+    pdu[0] = 0x0C;
+    ASSERT_EQ(modbus_master_parse_get_comm_event_counter(pdu, 5, &status, &count),
+              MODBUS_ERROR);
+    ASSERT_EQ(modbus_master_parse_get_comm_event_counter(pdu, 4, &status, &count),
+              MODBUS_ERROR);
+    PASS();
+}
+
+static void test_master_build_parse_event_log(void)
+{
+    uint8_t pdu[16];
+    uint16_t status = 0, ev_count = 0, msg_count = 0;
+    uint8_t events[8];
+    uint8_t events_len = 0;
+    TEST("master build/parse FC 0x0C round-trip (spec example)");
+    ASSERT_EQ(modbus_master_build_get_comm_event_log(pdu, sizeof(pdu)), 1);
+    ASSERT_EQ(pdu[0], 0x0C);
+    /* Spec example: byte count 08, status 0, events 264, messages 289,
+     * event bytes 0x20 (listen-only) + 0x00 (restart) */
+    pdu[0] = 0x0C; pdu[1] = 0x08;
+    pdu[2] = 0x00; pdu[3] = 0x00;
+    pdu[4] = 0x01; pdu[5] = 0x08;
+    pdu[6] = 0x01; pdu[7] = 0x21;
+    pdu[8] = 0x20; pdu[9] = 0x00;
+    ASSERT_EQ(modbus_master_parse_get_comm_event_log(pdu, 10, &status, &ev_count,
+                                                     &msg_count, events,
+                                                     sizeof(events), &events_len),
+              MODBUS_OK);
+    ASSERT_EQ(status, 0x0000);
+    ASSERT_EQ(ev_count, 264);
+    ASSERT_EQ(msg_count, 289);
+    ASSERT_EQ(events_len, 2);
+    ASSERT_EQ(events[0], 0x20);
+    ASSERT_EQ(events[1], 0x00);
+    /* inconsistent byte count rejected; undersized event buffer rejected */
+    pdu[1] = 0x09;
+    ASSERT_EQ(modbus_master_parse_get_comm_event_log(pdu, 10, &status, &ev_count,
+                                                     &msg_count, events,
+                                                     sizeof(events), &events_len),
+              MODBUS_ERROR);
+    pdu[1] = 0x08;
+    ASSERT_EQ(modbus_master_parse_get_comm_event_log(pdu, 10, &status, &ev_count,
+                                                     &msg_count, events,
+                                                     1, &events_len),
+              MODBUS_ERROR);
+    PASS();
+}
+
+static void test_master_event_loopback(void)
+{
+    uint16_t status = 0, ev_count = 0, msg_count = 0;
+    uint16_t regs[1] = {0};
+    uint8_t events[8];
+    uint8_t events_len = 0;
+    uint8_t exc = 0;
+    TEST("master 0x0B/0x0C over loopback transport (real slave)");
+    modbus_rtu_init(1);
+    modbus_master_init(&mock_transport);
+
+    /* Fresh slave: count 0, status 0x0000 */
+    ASSERT_EQ(modbus_master_get_comm_event_counter(1, &status, &ev_count, &exc),
+              MODBUS_OK);
+    ASSERT_EQ(status, 0x0000);
+    ASSERT_EQ(ev_count, 0);
+
+    /* One successful read: the counter moves to 1 */
+    ASSERT_EQ(modbus_master_read_holding_registers(1, 0, 1, regs, &exc), MODBUS_OK);
+    ASSERT_EQ(modbus_master_get_comm_event_counter(1, &status, &ev_count, &exc),
+              MODBUS_OK);
+    ASSERT_EQ(ev_count, 1);
+
+    /* The log: read's send event (0x40), then the power-up restart (0x00) */
+    ASSERT_EQ(modbus_master_get_comm_event_log(1, &status, &ev_count, &msg_count,
+                                               events, sizeof(events),
+                                               &events_len, &exc),
+              MODBUS_OK);
+    ASSERT_EQ(ev_count, 1);
+    ASSERT_EQ(msg_count, 4); /* 0x0B, read, 0x0B, this 0x0C */
+    ASSERT_EQ(events_len, 2);
+    ASSERT_EQ(events[0], MODBUS_EVENT_TX);
+    ASSERT_EQ(events[1], MODBUS_EVENT_RESTART);
+
+    /* Broadcast fetch is rejected before any bus traffic */
+    ASSERT_EQ(modbus_master_get_comm_event_counter(0, &status, &ev_count, &exc),
+              MODBUS_ERROR);
+    PASS();
+}
+
+static void test_tcp_rejects_fc0b_fc0c(void)
+{
+    /* MBAP: tid, pid=0, len=2 (unit + 1-byte PDU), unit=1; PDU = FC only */
+    uint8_t rx0b[10] = {0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0x01, 0x0B};
+    uint8_t rx0c[10] = {0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x01, 0x0C};
+    uint8_t tx[MODBUS_TCP_MAX_ADU];
+    uint16_t tx_len = 0;
+    TEST("TCP rejects FC 0x0B and 0x0C with exception 01");
+    modbus_rtu_init(1);
+    modbus_tcp_init(1);
+
+    ASSERT_EQ(modbus_tcp_build_response(rx0b, 8, tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(tx_len, 9); /* MBAP(7) + exception PDU(2) */
+    ASSERT_EQ(tx[7], 0x8B);
+    ASSERT_EQ(tx[8], MODBUS_EXC_ILLEGAL_FUNCTION);
+
+    tx_len = 0;
+    ASSERT_EQ(modbus_tcp_build_response(rx0c, 8, tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(tx_len, 9);
+    ASSERT_EQ(tx[7], 0x8C);
+    ASSERT_EQ(tx[8], MODBUS_EXC_ILLEGAL_FUNCTION);
+    PASS();
+}
+
+/* ============================================================
  * Modbus TCP must reject FC 0x08 (serial-line only)
  * ============================================================ */
 
@@ -1031,6 +1399,22 @@ int main(void)
     test_master_diag_loopback_transactions();
     test_master_diag_exception_round_trip();
     test_tcp_rejects_fc08();
+
+    printf("\n[FC 0x0B/0x0C Comm Event Counter/Log — slave (issue #10)]\n");
+    test_event_counter_response_and_rules();
+    test_event_counter_broadcast_rules();
+    test_event_counter_reset_by_diag();
+    test_event_log_layout_after_reset();
+    test_event_log_listen_only_recorded();
+    test_event_log_comm_error_recorded();
+    test_event_log_send_events();
+    test_event_fetch_rejects_extra_data();
+
+    printf("\n[FC 0x0B/0x0C — master + TCP isolation]\n");
+    test_master_build_parse_event_counter();
+    test_master_build_parse_event_log();
+    test_master_event_loopback();
+    test_tcp_rejects_fc0b_fc0c();
 
     printf("\n[Modbus Master PDU Tests]\n");
     test_master_build_read_holding();

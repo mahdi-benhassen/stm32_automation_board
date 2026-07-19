@@ -1,5 +1,6 @@
 #include "modbus_diag.h"
 #include "modbus.h"
+#include "modbus_event.h"
 
 /*
  * FC 0x08 Diagnostics — serial-line only (V1.1b3 §6.8).
@@ -127,6 +128,9 @@ uint16_t modbus_diag_process(const uint8_t *rx_pdu, uint16_t rx_pdu_len,
         }
         /* Restart: clear all communication event counters. */
         modbus_diag_clear_counters();
+        /* FC 0x0B/0x0C: reset event counter + log a restart event (0x00);
+         * data 0xFF00 ('Stop on Error') also clears the rest of the log */
+        modbus_event_note_restart((uint8_t)(data == 0xFF00U));
         if (s_listen_only) {
             /*
              * The only escape from listen-only mode; the exit itself is
@@ -160,6 +164,8 @@ uint16_t modbus_diag_process(const uint8_t *rx_pdu, uint16_t rx_pdu_len,
             return modbus_diag_exception(MODBUS_EXC_ILLEGAL_DATA_VALUE, tx_pdu);
         }
         s_listen_only = 1U;
+        /* FC 0x0C event log: record entering listen-only mode (0x04) */
+        modbus_event_push(MODBUS_EVENT_ENTER_LISTEN_ONLY);
         return 0U; /* No response is ever returned */
 
     case MODBUS_DIAG_SUB_CLEAR_COUNTERS:
@@ -167,6 +173,8 @@ uint16_t modbus_diag_process(const uint8_t *rx_pdu, uint16_t rx_pdu_len,
             return modbus_diag_exception(MODBUS_EXC_ILLEGAL_DATA_VALUE, tx_pdu);
         }
         modbus_diag_clear_counters();
+        /* FC 0x0B/0x0C: Clear Counters also resets the comm event counter */
+        modbus_event_clear_counter();
         if (is_broadcast) {
             return 0U; /* Broadcast: counters cleared, no response */
         }
@@ -217,6 +225,9 @@ void modbus_diag_note_bus_message(void)
 void modbus_diag_note_comm_error(void)
 {
     s_comm_error_count++;
+    /* FC 0x0C event log: comm-error receive event (bit 7 + bit 1) */
+    modbus_event_push((uint8_t)(MODBUS_EVENT_RX | MODBUS_EVENT_RX_COMM_ERROR |
+                      (s_listen_only ? MODBUS_EVENT_RX_LISTEN_ONLY : 0U)));
 }
 
 void modbus_diag_note_slave_message(void)
@@ -229,6 +240,10 @@ void modbus_diag_note_char_overrun(void)
     /* A character overrun is also a communication error, per spec. */
     s_char_overrun_count++;
     s_comm_error_count++;
+    /* FC 0x0C event log: comm-error receive event + character overrun bit */
+    modbus_event_push((uint8_t)(MODBUS_EVENT_RX | MODBUS_EVENT_RX_COMM_ERROR |
+                      MODBUS_EVENT_RX_CHAR_OVERRUN |
+                      (s_listen_only ? MODBUS_EVENT_RX_LISTEN_ONLY : 0U)));
 }
 
 void modbus_diag_note_result(uint8_t responded, uint8_t is_exception)
