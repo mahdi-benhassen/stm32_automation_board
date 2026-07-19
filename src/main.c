@@ -88,6 +88,110 @@ static void tcp_watchdog_checkin(void)
     checkin_modbus_tcp = 1;
 }
 
+/* ============================================================
+ * Modbus Master Demo (issue #9, ported from main) — see board_config.h
+ * for the defines.
+ *
+ * Same 4-step sequence as the bare-metal super-loop demo, but as its own
+ * FreeRTOS task: every MASTER_DEMO_PERIOD_MS, read 2 holding registers ->
+ * write single register (running sequence) -> read back -> FC 0x08 Return
+ * Query Data echo (0xA5A5) against a REMOTE slave on the RS485 bus.
+ * Results are stored in the volatile master_demo_* variables below
+ * (debugger-inspectable); failures just bump master_demo_err_count and
+ * the local slave keeps working.
+ *
+ * RTOS bus sharing needs no extra locking here: the modbus_master_rtu
+ * transport takes rs485_tx_mutex and arms modbus_master_rtu_is_waiting()
+ * for the duration of each transaction, so rs485_modbus_callback routes
+ * replies to master_rx_queue and modbus_rtu_task skips slave handling
+ * while the master owns the bus. The demo never touches the local
+ * register map, so modbus_mutex is not needed on this path.
+ * ============================================================ */
+#if MODBUS_MASTER_DEMO
+
+#if (MASTER_DEMO_SLAVE_ID == MODBUS_RTU_ADDRESS)
+#error "MASTER_DEMO_SLAVE_ID must differ from the local MODBUS_RTU_ADDRESS"
+#endif
+
+volatile uint32_t        master_demo_ok_count = 0;
+volatile uint32_t        master_demo_err_count = 0;
+volatile modbus_status_t master_demo_last_status = MODBUS_OK;
+volatile uint8_t         master_demo_last_exception = 0;
+volatile uint16_t        master_demo_last_regs[2] = {0U, 0U};
+volatile uint16_t        master_demo_write_value = 0U;
+volatile uint16_t        master_demo_diag_echo = 0U;
+
+static TaskHandle_t master_demo_task_handle = NULL;
+static uint16_t master_demo_seq = 0;
+
+static void master_demo_run(void)
+{
+    uint8_t exc = 0;
+    uint16_t regs[2] = {0U, 0U};
+    uint16_t echo = 0;
+    modbus_status_t st;
+
+    /* 1) Read 2 holding registers from the remote slave */
+    st = modbus_master_read_holding_registers(MASTER_DEMO_SLAVE_ID, 0, 2,
+                                              regs, &exc);
+    master_demo_last_status = st;
+    master_demo_last_exception = exc;
+    if (st != MODBUS_OK) {
+        master_demo_err_count++;
+        return;
+    }
+    master_demo_last_regs[0] = regs[0];
+    master_demo_last_regs[1] = regs[1];
+
+    /* 2) Write single register (running sequence value) */
+    master_demo_write_value = master_demo_seq++;
+    st = modbus_master_write_single_register(MASTER_DEMO_SLAVE_ID, 0,
+                                             master_demo_write_value, &exc);
+    master_demo_last_status = st;
+    master_demo_last_exception = exc;
+    if (st != MODBUS_OK) {
+        master_demo_err_count++;
+        return;
+    }
+
+    /* 3) Read it back */
+    st = modbus_master_read_holding_registers(MASTER_DEMO_SLAVE_ID, 0, 1,
+                                              regs, &exc);
+    master_demo_last_status = st;
+    master_demo_last_exception = exc;
+    if (st != MODBUS_OK) {
+        master_demo_err_count++;
+        return;
+    }
+    master_demo_last_regs[0] = regs[0];
+
+    /* 4) FC 0x08 sub 0x00 Return Query Data (diag echo) */
+    st = modbus_master_diag_query_data(MASTER_DEMO_SLAVE_ID, 0xA5A5U,
+                                       &echo, &exc);
+    master_demo_last_status = st;
+    master_demo_last_exception = exc;
+    if (st != MODBUS_OK || echo != 0xA5A5U) {
+        master_demo_err_count++;
+        return;
+    }
+    master_demo_diag_echo = echo;
+
+    master_demo_ok_count++;
+}
+
+static void master_demo_task(void *pvParameters)
+{
+    (void)pvParameters;
+    TickType_t last_wake = xTaskGetTickCount();
+
+    for (;;) {
+        master_demo_run();
+        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(MASTER_DEMO_PERIOD_MS));
+    }
+}
+
+#endif /* MODBUS_MASTER_DEMO */
+
 static void io_scan_task(void *pvParameters)
 {
     (void)pvParameters;
@@ -313,6 +417,11 @@ int main(void)
                 TASK_PRIO_IO_SCAN, &io_scan_task_handle);
     xTaskCreate(modbus_rtu_task, "ModbusRTU", STACK_MODBUS_RTU, NULL,
                 TASK_PRIO_MODBUS_RTU, &modbus_rtu_task_handle);
+#if MODBUS_MASTER_DEMO
+    /* Master demo task (issue #9 port): periodic sequence vs remote slave */
+    xTaskCreate(master_demo_task, "MasterDemo", STACK_MASTER_DEMO, NULL,
+                TASK_PRIO_MASTER_DEMO, &master_demo_task_handle);
+#endif
     /* lwIP Modbus TCP server on port 502 (static IP from board_config.h) */
     xTaskCreate(modbus_tcp_server_task, "ModbusTCP", STACK_MODBUS_TCP, modbus_mutex,
                 TASK_PRIO_MODBUS_TCP, &modbus_tcp_task_handle);

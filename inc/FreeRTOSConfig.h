@@ -54,12 +54,14 @@ extern uint32_t SystemCoreClock;
 #define TASK_PRIO_MODBUS_RTU     (tskIDLE_PRIORITY + 2)
 #define TASK_PRIO_MODBUS_TCP     (tskIDLE_PRIORITY + 2)
 #define TASK_PRIO_WATCHDOG       (tskIDLE_PRIORITY + 1)
+#define TASK_PRIO_MASTER_DEMO    (tskIDLE_PRIORITY + 1)
 
 /* Task stack sizes */
 #define STACK_IO_SCAN            (configMINIMAL_STACK_SIZE * 2)
 #define STACK_MODBUS_RTU         (configMINIMAL_STACK_SIZE * 3)
 #define STACK_MODBUS_TCP         (configMINIMAL_STACK_SIZE * 6) /* netconn + ADU buffers */
 #define STACK_WATCHDOG            configMINIMAL_STACK_SIZE
+#define STACK_MASTER_DEMO        (configMINIMAL_STACK_SIZE * 3) /* ADU buffers in master xact */
 
 /* Hook functions */
 #define vPortSVCHandler          SVC_Handler

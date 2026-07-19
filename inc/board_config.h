@@ -217,6 +217,29 @@
 #define MODBUS_HOLDING_REG_OFFSET       0x0000
 
 /* ============================================================
+ * Modbus Master Demo (issue #9, ported from main)
+ * ------------------------------------------------------------
+ * FreeRTOS task (master_demo_task in main.c) that periodically exercises
+ * the RTU master API over the RS485 bus against a REMOTE slave (e.g. a
+ * second board flashed with its own slave ID). The local slave on this
+ * board keeps answering its own MODBUS_RTU_ADDRESS on the same bus.
+ *
+ *   MODBUS_MASTER_DEMO      1 = enabled (default), 0 = compiled out
+ *   MASTER_DEMO_SLAVE_ID    remote slave to poll — MUST differ from
+ *                           MODBUS_RTU_ADDRESS (compile-time checked)
+ *   MASTER_DEMO_PERIOD_MS   period between demo sequences (RTOS ticks)
+ *
+ * Results land in volatile master_demo_* variables in main.c, inspectable
+ * in a debugger. Timeouts/errors are non-fatal (error counter bumps,
+ * slave side keeps running). Bus sharing is handled by the
+ * modbus_master_rtu transport (rs485_tx_mutex + master RX queue routing);
+ * each transaction can wait up to the master timeout (500 ms default).
+ * ============================================================ */
+#define MODBUS_MASTER_DEMO      1
+#define MASTER_DEMO_SLAVE_ID    2U
+#define MASTER_DEMO_PERIOD_MS   2000U
+
+/* ============================================================
  * MAC Address
  * ============================================================ */
 #define MAC_ADDR0   0x00
