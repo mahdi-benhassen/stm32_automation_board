@@ -208,6 +208,29 @@
 #define MODBUS_HOLDING_REG_OFFSET       0x0000
 
 /* ============================================================
+ * Modbus Master Demo (issue #9)
+ * ------------------------------------------------------------
+ * Compile-time-gated demo that periodically exercises the RTU master
+ * API over the RS485 bus against a REMOTE slave (e.g. a second board
+ * flashed with its own slave ID). The local slave on this board keeps
+ * answering its own MODBUS_RTU_ADDRESS on the same bus.
+ *
+ *   MODBUS_MASTER_DEMO      1 = enabled (default), 0 = compiled out
+ *   MASTER_DEMO_SLAVE_ID    remote slave to poll — MUST differ from
+ *                           MODBUS_RTU_ADDRESS (compile-time checked)
+ *   MASTER_DEMO_PERIOD_MS   pause between demo sequences (sys_tick ms)
+ *
+ * Results land in volatile master_demo_* variables in main.c, inspectable
+ * in a debugger. Timeouts/errors are non-fatal (error counter bumps,
+ * slave side keeps running). Note: each master transaction waits for its
+ * response with the existing transport timeout, so with no remote slave
+ * on the bus one sequence can take a few hundred ms per transaction.
+ * ============================================================ */
+#define MODBUS_MASTER_DEMO      1
+#define MASTER_DEMO_SLAVE_ID    2U
+#define MASTER_DEMO_PERIOD_MS   2000U
+
+/* ============================================================
  * MAC Address
  * ============================================================ */
 #define MAC_ADDR0   0x00
