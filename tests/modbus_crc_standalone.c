@@ -35,8 +35,9 @@ int modbus_validate_quantity(uint8_t fc, uint16_t quantity)
 
 /*
  * Known-supported function codes for this firmware image.
- * FC 0x08 Diagnostics is serial-line only (RTU); TCP rejects it with
- * Illegal Function — covered by test_tcp_rejects_fc08.
+ * FC 0x08 Diagnostics, FC 0x0B/0x0C and FC 0x11 are serial-line only (RTU);
+ * TCP rejects them with Illegal Function — covered by the test_tcp_rejects_*
+ * tests.
  */
 int modbus_fc_supported(uint8_t fc)
 {
@@ -49,11 +50,16 @@ int modbus_fc_supported(uint8_t fc)
     case MODBUS_FC_WRITE_SINGLE_REGISTER:
     case MODBUS_FC_READ_EXCEPTION_STATUS:
     case MODBUS_FC_DIAGNOSTICS:
+    case MODBUS_FC_GET_COMM_EVENT_COUNTER:
+    case MODBUS_FC_GET_COMM_EVENT_LOG:
     case MODBUS_FC_WRITE_MULTIPLE_COILS:
     case MODBUS_FC_WRITE_MULTIPLE_REGISTERS:
+    case MODBUS_FC_REPORT_SERVER_ID:
     case MODBUS_FC_READ_FILE_RECORD:
     case MODBUS_FC_WRITE_FILE_RECORD:
+    case MODBUS_FC_MASK_WRITE_REGISTER:
     case MODBUS_FC_READ_WRITE_MULTIPLE_REGS:
+    case MODBUS_FC_READ_FIFO_QUEUE:
     case MODBUS_FC_ENCAPSULATED_INTERFACE:
         return 1;
     default:

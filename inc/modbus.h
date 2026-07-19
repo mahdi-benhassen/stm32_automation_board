@@ -36,9 +36,12 @@
 #define MODBUS_FC_GET_COMM_EVENT_LOG        0x0C
 #define MODBUS_FC_WRITE_MULTIPLE_COILS      0x0F
 #define MODBUS_FC_WRITE_MULTIPLE_REGISTERS  0x10
+#define MODBUS_FC_REPORT_SERVER_ID          0x11
 #define MODBUS_FC_READ_FILE_RECORD          0x14
 #define MODBUS_FC_WRITE_FILE_RECORD         0x15
+#define MODBUS_FC_MASK_WRITE_REGISTER       0x16
 #define MODBUS_FC_READ_WRITE_MULTIPLE_REGS  0x17
+#define MODBUS_FC_READ_FIFO_QUEUE           0x18
 #define MODBUS_FC_ENCAPSULATED_INTERFACE    0x2B
 
 /* MEI types for FC 0x2B */
@@ -57,6 +60,24 @@
 #define MODBUS_FILE_COUNT                   4U
 #define MODBUS_FILE_SIZE_REGS               128U
 #define MODBUS_FILE_REF_TYPE                0x06U
+
+/*
+ * FC 0x11 Report Server ID (serial line only) — device-specific ID data.
+ * Overridable at compile time (e.g. -DMODBUS_SERVER_ID="\"My Device\""),
+ * same as the other config defines. Keep it short: the response carries it
+ * in a 1-byte byte-count field together with the run indicator.
+ */
+#ifndef MODBUS_SERVER_ID
+#define MODBUS_SERVER_ID                    "STM32-Automation-Board"
+#endif
+
+/*
+ * FC 0x18 Read FIFO Queue — the board has no hardware FIFOs, so the slave
+ * core keeps this small generic store. Depth 31 is the spec maximum
+ * (V1.1b3 §6.18: count register + up to 31 queued data registers).
+ */
+#define MODBUS_FIFO_COUNT                   2U
+#define MODBUS_FIFO_DEPTH                   31U
 
 /* Modbus exception codes */
 #define MODBUS_EXC_NONE                     0x00
@@ -111,6 +132,15 @@ uint16_t modbus_read_discrete_input(uint16_t addr);
 uint16_t modbus_read_input_register(uint16_t addr);
 uint16_t modbus_read_holding_register(uint16_t addr);
 void modbus_write_holding_register(uint16_t addr, uint16_t value);
+
+/**
+ * FC 0x18 backing store: append one register to a FIFO queue.
+ * @param fifo_addr  queue index, 0 .. MODBUS_FIFO_COUNT-1
+ * @return 1 on success, 0 if the queue address is undefined or full.
+ * FC 0x18 reads report the queue oldest-first and do NOT drain it
+ * (V1.1b3 §6.18); queues are cleared by modbus_rtu_init().
+ */
+uint8_t modbus_fifo_push(uint16_t fifo_addr, uint16_t value);
 
 void modbus_sync_inputs(void);
 
