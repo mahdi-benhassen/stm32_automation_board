@@ -1520,8 +1520,8 @@ static void test_mask_write_tcp_accepted(void)
               MODBUS_OK);
     ASSERT_EQ(tx_len, 14); /* MBAP(7) + echo PDU(7) */
     ASSERT_EQ(tx[7], MODBUS_FC_MASK_WRITE_REGISTER);
-    ASSERT_EQ(tx[11], 0x00);
-    ASSERT_EQ(tx[12], 0xF2);
+    ASSERT_EQ(tx[10], 0x00);
+    ASSERT_EQ(tx[11], 0xF2);
     ASSERT_EQ(modbus_read_holding_register(4), 0x0017);
     PASS();
 }
@@ -1653,7 +1653,7 @@ static void test_fifo_tcp_accepted(void)
               MODBUS_OK);
     ASSERT_EQ(tx_len, 14); /* MBAP(7) + PDU(5 + 2) */
     ASSERT_EQ(tx[7], MODBUS_FC_READ_FIFO_QUEUE);
-    ASSERT_EQ((tx[11] << 8) | tx[12], 1); /* FIFO count */
+    ASSERT_EQ((tx[10] << 8) | tx[11], 1); /* FIFO count */
     PASS();
 }
 
