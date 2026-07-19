@@ -34,7 +34,29 @@ modbus_master_devid_t id;
 st = modbus_master_read_device_identification(2, MODBUS_DEVID_BASIC, 0, &id, &exc);
 ```
 
-Supported master function codes: **0x01–0x08, 0x0F, 0x10, 0x14, 0x15, 0x17, 0x2B/0x0E**. FC 0x08 (Diagnostics) is serial-line only (RTU); Modbus TCP rejects it with exception 01 as specified.
+Both the slave and the master support the full public function-code set — 19 function codes:
+
+| FC | Name | Slave | Master | Notes |
+|----|------|:-----:|:------:|-------|
+| 0x01 | Read Coils | ✅ | ✅ | |
+| 0x02 | Read Discrete Inputs | ✅ | ✅ | |
+| 0x03 | Read Holding Registers | ✅ | ✅ | |
+| 0x04 | Read Input Registers | ✅ | ✅ | |
+| 0x05 | Write Single Coil | ✅ | ✅ | broadcast-eligible |
+| 0x06 | Write Single Register | ✅ | ✅ | broadcast-eligible |
+| 0x07 | Read Exception Status | ✅ | ✅ | serial-only per spec; this firmware also serves it over TCP |
+| 0x08 | Diagnostics | ✅ | ✅ | serial line only — TCP rejects with exception 01 |
+| 0x0B | Get Comm Event Counter | ✅ | ✅ | serial line only — TCP rejects with exception 01 |
+| 0x0C | Get Comm Event Log | ✅ | ✅ | serial line only — TCP rejects with exception 01 |
+| 0x0F | Write Multiple Coils | ✅ | ✅ | broadcast-eligible |
+| 0x10 | Write Multiple Registers | ✅ | ✅ | broadcast-eligible |
+| 0x11 | Report Server ID | ✅ | ✅ | serial line only — TCP rejects with exception 01 |
+| 0x14 | Read File Record | ✅ | ✅ | virtual file store |
+| 0x15 | Write File Record | ✅ | ✅ | broadcast-eligible, virtual file store |
+| 0x16 | Mask Write Register | ✅ | ✅ | broadcast-eligible |
+| 0x17 | Read/Write Multiple Registers | ✅ | ✅ | broadcast-eligible |
+| 0x18 | Read FIFO Queue | ✅ | ✅ | generic FIFO store (`modbus_fifo_push`) |
+| 0x2B/0x0E | Read Device Identification | ✅ | ✅ | MEI 0x0E, basic objects |
 
 The slave side also answers **FC 0x0B Get Comm Event Counter** and **FC 0x0C Get Comm Event Log** on RTU (broadcasts are silently ignored; TCP rejects both with exception 01). The event log is a 64-entry ring (most recent first); `FC 0x08` sub-function `0x01` Restart Communications with data `0xFF00` additionally clears it.
 
