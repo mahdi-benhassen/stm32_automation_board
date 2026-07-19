@@ -848,6 +848,15 @@ modbus_status_t modbus_rtu_process(uint8_t *rx_buf, uint16_t rx_len,
      */
     uint8_t exception_raised = ((tx_pdu[0] & 0x80U) != 0U);
 
+    /*
+     * A broadcast that was actually executed leaves its function code in
+     * tx_pdu[0] (with bit 7 set on exception). An unsupported broadcast FC
+     * is dropped by modbus_pdu_process() before tx_pdu is touched, leaving
+     * tx_pdu[0] == 0 — that is NOT a successful message completion and
+     * must not bump the comm event counter.
+     */
+    uint8_t broadcast_executed = (is_broadcast && tx_pdu[0] != 0U);
+
     modbus_diag_note_result(responded, responded && exception_raised);
 
     /*
@@ -864,7 +873,7 @@ modbus_status_t modbus_rtu_process(uint8_t *rx_buf, uint16_t rx_len,
         modbus_event_note_tx(exception_raised ? tx_pdu[1] : 0U);
     }
     if (!is_fetch && !exception_raised && !resets_events &&
-        !modbus_diag_listen_only() && (responded || is_broadcast)) {
+        !modbus_diag_listen_only() && (responded || broadcast_executed)) {
         modbus_event_note_success();
     }
 
