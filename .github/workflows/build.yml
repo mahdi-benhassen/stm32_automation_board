@@ -105,7 +105,10 @@ jobs:
 
       - name: Build and run native Modbus protocol tests
         run: |
-          gcc -Wall -Wextra -o test_modbus tests/test_modbus.c tests/modbus_crc_standalone.c -Itests
+          gcc -Wall -Wextra -Itests -Iinc -o test_modbus \
+            tests/test_modbus.c tests/modbus_crc_standalone.c \
+            tests/modbus_host_stubs.c \
+            src/modbus.c src/modbus_diag.c src/modbus_master.c src/modbus_tcp.c
           ./test_modbus
 
   lint:

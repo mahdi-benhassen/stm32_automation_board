@@ -1,53 +1,30 @@
-#ifndef MODBUS_TEST_H
-#define MODBUS_TEST_H
+#ifndef MODBUS_TEST_CONFIG_H
+#define MODBUS_TEST_CONFIG_H
 
-#include <stdint.h>
-#include <stddef.h>
+/*
+ * Umbrella for the native test suite: pulls in the REAL protocol core
+ * headers (via -Iinc; tests/stm32f4xx_hal.h satisfies the HAL include in
+ * board_config.h) and declares the test-only helper validators that live
+ * in tests/modbus_crc_standalone.c.
+ */
+#include "modbus.h"
+#include "modbus_diag.h"
+#include "modbus_master.h"
+#include "modbus_tcp.h"
 
-#define MODBUS_MAX_COILS        128
-#define MODBUS_MAX_REGISTERS    256
-
-#define MODBUS_FC_READ_COILS                0x01
-#define MODBUS_FC_READ_DISCRETE_INPUTS      0x02
-#define MODBUS_FC_READ_HOLDING_REGISTERS    0x03
-#define MODBUS_FC_READ_INPUT_REGISTERS      0x04
-#define MODBUS_FC_WRITE_SINGLE_COIL         0x05
-#define MODBUS_FC_WRITE_SINGLE_REGISTER     0x06
-#define MODBUS_FC_READ_EXCEPTION_STATUS     0x07
-#define MODBUS_FC_WRITE_MULTIPLE_COILS      0x0F
-#define MODBUS_FC_WRITE_MULTIPLE_REGISTERS  0x10
-#define MODBUS_FC_READ_FILE_RECORD          0x14
-#define MODBUS_FC_WRITE_FILE_RECORD         0x15
-#define MODBUS_FC_READ_WRITE_MULTIPLE_REGS  0x17
-#define MODBUS_FC_ENCAPSULATED_INTERFACE    0x2B
-#define MODBUS_MEI_READ_DEVICE_ID           0x0E
-
-#define MODBUS_EXC_ILLEGAL_FUNCTION         0x01
-#define MODBUS_EXC_ILLEGAL_DATA_ADDRESS     0x02
-#define MODBUS_EXC_ILLEGAL_DATA_VALUE       0x03
-
+/* Spec quantity limits mirrored from src/modbus.c for the validators. */
 #define MODBUS_MAX_READ_REGISTERS   125U
 #define MODBUS_MAX_WRITE_REGISTERS  123U
 #define MODBUS_MAX_READ_COILS       2000U
 #define MODBUS_MAX_WRITE_COILS      1968U
 
-#define MODBUS_COIL_OFFSET              0x0000
-#define MODBUS_DISCRETE_INPUT_OFFSET    0x0000
-#define MODBUS_INPUT_REG_OFFSET         0x0000
-#define MODBUS_HOLDING_REG_OFFSET       0x0000
+/* Test-only helpers (implemented in tests/modbus_crc_standalone.c). */
+int modbus_validate_quantity(uint8_t fc, uint16_t quantity);
+int modbus_fc_supported(uint8_t fc);
+int modbus_mei_supported(uint8_t mei_type);
+int modbus_file_number_valid(uint16_t file_number);
+int modbus_validate_single_coil_value(uint16_t value);
+uint16_t modbus_response_size(uint8_t fc, uint16_t quantity);
+int modbus_response_fits(uint8_t fc, uint16_t quantity, uint16_t buf_size);
 
-#define DO_COUNT    8
-#define DI_COUNT    8
-#define AI_COUNT    4
-#define AO_COUNT    2
-#define RELAY_COUNT 4
-
-#define MODBUS_RTU_FRAME_MAX    256
-
-/* Modbus RTU T1.5 / T3.5 (Serial Line V1.02 §2.5.1.1) */
-#define MODBUS_RTU_BITS_PER_CHAR        11U
-#define MODBUS_RTU_BAUD_THRESHOLD       19200U
-#define MODBUS_RTU_T15_FIXED_US         750U
-#define MODBUS_RTU_T35_FIXED_US         1750U
-
-#endif /* MODBUS_TEST_H */
+#endif /* MODBUS_TEST_CONFIG_H */

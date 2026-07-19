@@ -1,5 +1,6 @@
 #include "rs485.h"
 #include "modbus.h"
+#include "modbus_diag.h"
 
 /* 1 ms free-running counter maintained in SysTick_Handler (main.c) */
 extern volatile uint32_t sys_tick;
@@ -386,6 +387,7 @@ void USART2_IRQHandler(void)
 
     /* Clear overrun if any so RX keeps working */
     if (__HAL_UART_GET_FLAG(&huart_rs485, UART_FLAG_ORE)) {
+        modbus_diag_note_char_overrun();
         volatile uint32_t tmp = huart_rs485.Instance->SR;
         tmp = huart_rs485.Instance->DR;
         (void)tmp;
