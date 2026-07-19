@@ -1686,6 +1686,184 @@ static void test_fc_new_codes_supported(void)
 }
 
 /* ============================================================
+ * FC 0x11 / 0x16 / 0x18 — master build/parse + loopback
+ * ============================================================ */
+
+static void test_master_build_parse_server_id(void)
+{
+    uint8_t pdu[4];
+    uint8_t resp[8] = {MODBUS_FC_REPORT_SERVER_ID, 4, 'A', 'B', 'C', 0xFF};
+    uint8_t id[8];
+    uint8_t id_len = 0;
+    uint8_t run = 0;
+    TEST("master build/parse FC 0x11 report server ID round-trip");
+    ASSERT_EQ(modbus_master_build_report_server_id(pdu, sizeof(pdu)), 1);
+    ASSERT_EQ(pdu[0], MODBUS_FC_REPORT_SERVER_ID);
+
+    ASSERT_EQ(modbus_master_parse_report_server_id(resp, 6, id, sizeof(id),
+                                                   &id_len, &run), MODBUS_OK);
+    ASSERT_EQ(id_len, 3);
+    ASSERT_EQ(id[0], 'A');
+    ASSERT_EQ(id[1], 'B');
+    ASSERT_EQ(id[2], 'C');
+    ASSERT_EQ(run, 0xFF);
+
+    /* Wrong FC, truncated PDU, inconsistent byte count: all rejected */
+    resp[0] = 0x12;
+    ASSERT_EQ(modbus_master_parse_report_server_id(resp, 6, id, sizeof(id),
+                                                   &id_len, &run), MODBUS_ERROR);
+    resp[0] = MODBUS_FC_REPORT_SERVER_ID;
+    ASSERT_EQ(modbus_master_parse_report_server_id(resp, 5, id, sizeof(id),
+                                                   &id_len, &run), MODBUS_ERROR);
+    ASSERT_EQ(modbus_master_parse_report_server_id(resp, 6, id, 2,
+                                                   &id_len, &run), MODBUS_ERROR);
+    PASS();
+}
+
+static void test_master_build_parse_mask_write(void)
+{
+    uint8_t pdu[7];
+    uint8_t bad[7];
+    TEST("master build/parse FC 0x16 mask write register round-trip");
+    ASSERT_EQ(modbus_master_build_mask_write_register(0x0004, 0x00F2, 0x0025,
+                                                      pdu, sizeof(pdu)), 7);
+    ASSERT_EQ(pdu[0], MODBUS_FC_MASK_WRITE_REGISTER);
+    ASSERT_EQ(pdu[1], 0x00);
+    ASSERT_EQ(pdu[2], 0x04);
+    ASSERT_EQ(pdu[3], 0x00);
+    ASSERT_EQ(pdu[4], 0xF2);
+    ASSERT_EQ(pdu[5], 0x00);
+    ASSERT_EQ(pdu[6], 0x25);
+
+    /* Echo parse: identical response accepted, any flip rejected */
+    ASSERT_EQ(modbus_master_parse_echo(pdu, 7, pdu, 7), MODBUS_OK);
+    for (uint16_t i = 0; i < 7U; i++) {
+        bad[i] = pdu[i];
+    }
+    bad[4] ^= 0x01U;
+    ASSERT_EQ(modbus_master_parse_echo(bad, 7, pdu, 7), MODBUS_ERROR);
+    ASSERT_EQ(modbus_master_parse_echo(pdu, 5, pdu, 7), MODBUS_ERROR);
+    ASSERT_EQ(modbus_master_parse_echo(NULL, 7, pdu, 7), MODBUS_ERROR);
+    PASS();
+}
+
+static void test_master_build_parse_fifo(void)
+{
+    uint8_t pdu[3];
+    uint8_t resp[13] = {MODBUS_FC_READ_FIFO_QUEUE, 0x00, 0x06, 0x00, 0x02,
+                        0x01, 0xB8, 0x12, 0x84, 0, 0, 0, 0};
+    uint8_t empty[5] = {MODBUS_FC_READ_FIFO_QUEUE, 0x00, 0x02, 0x00, 0x00};
+    uint8_t over[5]  = {MODBUS_FC_READ_FIFO_QUEUE, 0x00, 0x42, 0x00, 0x20};
+    uint16_t regs[4];
+    uint8_t count = 0;
+    TEST("master build/parse FC 0x18 read FIFO queue round-trip");
+    ASSERT_EQ(modbus_master_build_read_fifo_queue(0x04DE, pdu, sizeof(pdu)), 3);
+    ASSERT_EQ(pdu[0], MODBUS_FC_READ_FIFO_QUEUE);
+    ASSERT_EQ(pdu[1], 0x04);
+    ASSERT_EQ(pdu[2], 0xDE);
+
+    ASSERT_EQ(modbus_master_parse_read_fifo_queue(resp, 9, regs, 4, &count),
+              MODBUS_OK);
+    ASSERT_EQ(count, 2);
+    ASSERT_EQ(regs[0], 0x01B8);
+    ASSERT_EQ(regs[1], 0x1284);
+
+    /* Empty queue response: normal, count 0 */
+    ASSERT_EQ(modbus_master_parse_read_fifo_queue(empty, 5, regs, 4, &count),
+              MODBUS_OK);
+    ASSERT_EQ(count, 0);
+
+    /* FIFO count > 31 must be rejected (spec limit) */
+    ASSERT_EQ(modbus_master_parse_read_fifo_queue(over, 5, regs, 4, &count),
+              MODBUS_ERROR);
+    /* Byte count / PDU length inconsistency rejected */
+    ASSERT_EQ(modbus_master_parse_read_fifo_queue(resp, 8, regs, 4, &count),
+              MODBUS_ERROR);
+    PASS();
+}
+
+static void test_master_server_id_loopback(void)
+{
+    static const char expect_id[] = MODBUS_SERVER_ID;
+    uint8_t id[64];
+    uint8_t id_len = 0;
+    uint8_t run = 0;
+    uint8_t exc = 0;
+    TEST("master FC 0x11 over loopback transport (real slave)");
+    modbus_rtu_init(1);
+    modbus_master_init(&mock_transport);
+
+    ASSERT_EQ(modbus_master_report_server_id(1, id, sizeof(id), &id_len,
+                                             &run, &exc), MODBUS_OK);
+    ASSERT_EQ(id_len, (uint8_t)(sizeof(expect_id) - 1U));
+    ASSERT_TRUE(memcmp(id, expect_id, id_len) == 0);
+    ASSERT_EQ(run, 0xFF);
+
+    /* Broadcast is rejected before any bus traffic */
+    ASSERT_EQ(modbus_master_report_server_id(0, id, sizeof(id), &id_len,
+                                             &run, &exc), MODBUS_ERROR);
+    PASS();
+}
+
+static void test_master_mask_write_loopback(void)
+{
+    uint8_t exc = 0;
+    TEST("master FC 0x16 over loopback: echo checked, register updated");
+    modbus_rtu_init(1);
+    modbus_master_init(&mock_transport);
+    modbus_write_holding_register(4, 0x0012);
+
+    ASSERT_EQ(modbus_master_mask_write_register(1, 4, 0x00F2, 0x0025, &exc),
+              MODBUS_OK);
+    ASSERT_EQ(modbus_read_holding_register(4), 0x0017);
+
+    /* Broadcast: executes on the slave, MODBUS_OK without a response */
+    ASSERT_EQ(modbus_master_mask_write_register(0, 4, 0x0000, 0xABCD, &exc),
+              MODBUS_OK);
+    ASSERT_EQ(modbus_read_holding_register(4), 0xABCD);
+
+    /* Bad address surfaces as MODBUS_EXCEPTION 02 */
+    ASSERT_EQ(modbus_master_mask_write_register(1, MODBUS_MAX_REGISTERS,
+                                                0xFFFF, 0x0000, &exc),
+              MODBUS_EXCEPTION);
+    ASSERT_EQ(exc, MODBUS_EXC_ILLEGAL_DATA_ADDRESS);
+    PASS();
+}
+
+static void test_master_fifo_loopback(void)
+{
+    uint16_t regs[8];
+    uint8_t count = 0;
+    uint8_t exc = 0;
+    TEST("master FC 0x18 over loopback: values, exceptions, broadcast guard");
+    modbus_rtu_init(1);
+    modbus_master_init(&mock_transport);
+    ASSERT_EQ(modbus_fifo_push(0, 0x00AA), 1U);
+    ASSERT_EQ(modbus_fifo_push(0, 0x00BB), 1U);
+
+    ASSERT_EQ(modbus_master_read_fifo_queue(1, 0, regs, 8, &count, &exc),
+              MODBUS_OK);
+    ASSERT_EQ(count, 2);
+    ASSERT_EQ(regs[0], 0x00AA);
+    ASSERT_EQ(regs[1], 0x00BB);
+
+    /* Read again: the slave must not have drained the queue */
+    ASSERT_EQ(modbus_master_read_fifo_queue(1, 0, regs, 8, &count, &exc),
+              MODBUS_OK);
+    ASSERT_EQ(count, 2);
+
+    /* Undefined FIFO pointer surfaces as MODBUS_EXCEPTION 02 */
+    ASSERT_EQ(modbus_master_read_fifo_queue(1, MODBUS_FIFO_COUNT, regs, 8,
+                                            &count, &exc), MODBUS_EXCEPTION);
+    ASSERT_EQ(exc, MODBUS_EXC_ILLEGAL_DATA_ADDRESS);
+
+    /* Broadcast is rejected before any bus traffic */
+    ASSERT_EQ(modbus_master_read_fifo_queue(0, 0, regs, 8, &count, &exc),
+              MODBUS_ERROR);
+    PASS();
+}
+
+/* ============================================================
  * Modbus TCP must reject FC 0x08 (serial-line only)
  * ============================================================ */
 
@@ -1828,6 +2006,14 @@ int main(void)
     test_fifo_broadcast_dropped();
     test_fifo_tcp_accepted();
     test_event_counter_covers_new_fcs();
+
+    printf("\n[FC 0x11/0x16/0x18 — master build/parse + loopback]\n");
+    test_master_build_parse_server_id();
+    test_master_build_parse_mask_write();
+    test_master_build_parse_fifo();
+    test_master_server_id_loopback();
+    test_master_mask_write_loopback();
+    test_master_fifo_loopback();
 
     printf("\n[Modbus Master PDU Tests]\n");
     test_master_build_read_holding();

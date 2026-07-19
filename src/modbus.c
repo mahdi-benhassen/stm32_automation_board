@@ -706,7 +706,10 @@ modbus_status_t modbus_pdu_process(uint8_t *rx_pdu, uint16_t rx_pdu_len,
             pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_DATA_VALUE, tx_pdu);
             break;
         }
-        if (start_addr >= MODBUS_FIFO_COUNT) {
+        /* NB: the shared start_addr is only parsed for 5+-byte PDUs; the
+         * FIFO pointer address must be taken from the raw request here. */
+        uint16_t fifo_addr = ((uint16_t)rx_pdu[1] << 8) | rx_pdu[2];
+        if (fifo_addr >= MODBUS_FIFO_COUNT) {
             /* Undefined FIFO pointer */
             pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_DATA_ADDRESS, tx_pdu);
             break;
@@ -719,14 +722,14 @@ modbus_status_t modbus_pdu_process(uint8_t *rx_pdu, uint16_t rx_pdu_len,
          * An empty queue is a normal response with FIFO count 0.
          */
         {
-            uint8_t count = fifo_len[start_addr];
+            uint8_t count = fifo_len[fifo_addr];
             tx_pdu[0] = func_code;
             tx_pdu[1] = 0x00U;                    /* byte count hi (2 + 2N) */
             tx_pdu[2] = (uint8_t)(2U + 2U * count); /* byte count lo */
             tx_pdu[3] = 0x00U;                    /* FIFO count hi */
             tx_pdu[4] = count;                    /* FIFO count lo */
             for (uint8_t i = 0; i < count; i++) {
-                uint16_t val = fifo_store[start_addr][i];
+                uint16_t val = fifo_store[fifo_addr][i];
                 tx_pdu[5U + i * 2U]     = (uint8_t)(val >> 8);
                 tx_pdu[5U + i * 2U + 1U] = (uint8_t)(val & 0xFFU);
             }

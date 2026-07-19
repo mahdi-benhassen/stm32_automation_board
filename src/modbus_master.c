@@ -148,6 +148,40 @@ uint16_t modbus_master_build_get_comm_event_log(uint8_t *pdu, uint16_t pdu_max)
     return 1U;
 }
 
+uint16_t modbus_master_build_report_server_id(uint8_t *pdu, uint16_t pdu_max)
+{
+    if (!pdu || pdu_max < 1U) {
+        return 0U;
+    }
+    pdu[0] = MODBUS_FC_REPORT_SERVER_ID;
+    return 1U;
+}
+
+uint16_t modbus_master_build_mask_write_register(uint16_t addr, uint16_t and_mask,
+                                                 uint16_t or_mask, uint8_t *pdu,
+                                                 uint16_t pdu_max)
+{
+    if (!pdu || pdu_max < 7U) {
+        return 0U;
+    }
+    pdu[0] = MODBUS_FC_MASK_WRITE_REGISTER;
+    (void)put_u16_be(&pdu[1], addr);
+    (void)put_u16_be(&pdu[3], and_mask);
+    (void)put_u16_be(&pdu[5], or_mask);
+    return 7U;
+}
+
+uint16_t modbus_master_build_read_fifo_queue(uint16_t fifo_addr, uint8_t *pdu,
+                                             uint16_t pdu_max)
+{
+    if (!pdu || pdu_max < 3U) {
+        return 0U;
+    }
+    pdu[0] = MODBUS_FC_READ_FIFO_QUEUE;
+    (void)put_u16_be(&pdu[1], fifo_addr);
+    return 3U;
+}
+
 uint16_t modbus_master_build_diagnostics(uint16_t sub_function, uint16_t data,
                                          uint8_t *pdu, uint16_t pdu_max)
 {
@@ -646,6 +680,84 @@ modbus_status_t modbus_master_parse_device_id(const uint8_t *pdu, uint16_t pdu_l
         }
         pos = (uint16_t)(pos + slen);
     }
+    return MODBUS_OK;
+}
+
+modbus_status_t modbus_master_parse_echo(const uint8_t *pdu, uint16_t pdu_len,
+                                         const uint8_t *req_pdu,
+                                         uint16_t req_pdu_len)
+{
+    if (!pdu || !req_pdu || pdu_len != req_pdu_len || req_pdu_len == 0U) {
+        return MODBUS_ERROR;
+    }
+    for (uint16_t i = 0; i < req_pdu_len; i++) {
+        if (pdu[i] != req_pdu[i]) {
+            return MODBUS_ERROR;
+        }
+    }
+    return MODBUS_OK;
+}
+
+modbus_status_t modbus_master_parse_report_server_id(const uint8_t *pdu,
+                                                     uint16_t pdu_len,
+                                                     uint8_t *id_out,
+                                                     uint8_t id_max,
+                                                     uint8_t *id_len_out,
+                                                     uint8_t *run_status_out)
+{
+    if (!pdu || pdu_len < 3U) {
+        return MODBUS_ERROR;
+    }
+    if (pdu[0] != MODBUS_FC_REPORT_SERVER_ID) {
+        return MODBUS_ERROR;
+    }
+    /* Byte count = ID bytes + run indicator, and must match the PDU size */
+    uint8_t byte_count = pdu[1];
+    if (byte_count < 1U || pdu_len != (uint16_t)(2U + byte_count)) {
+        return MODBUS_ERROR;
+    }
+    uint8_t id_len = (uint8_t)(byte_count - 1U);
+    if (id_out || id_len_out) {
+        if (!id_out || !id_len_out || id_len > id_max) {
+            return MODBUS_ERROR;
+        }
+        for (uint8_t i = 0; i < id_len; i++) {
+            id_out[i] = pdu[2U + i];
+        }
+        *id_len_out = id_len;
+    }
+    if (run_status_out) {
+        *run_status_out = pdu[2U + id_len];
+    }
+    return MODBUS_OK;
+}
+
+modbus_status_t modbus_master_parse_read_fifo_queue(const uint8_t *pdu,
+                                                    uint16_t pdu_len,
+                                                    uint16_t *regs_out,
+                                                    uint8_t regs_max,
+                                                    uint8_t *count_out)
+{
+    if (!pdu || !regs_out || !count_out || pdu_len < 5U) {
+        return MODBUS_ERROR;
+    }
+    if (pdu[0] != MODBUS_FC_READ_FIFO_QUEUE) {
+        return MODBUS_ERROR;
+    }
+    uint16_t byte_count = ((uint16_t)pdu[1] << 8) | pdu[2];
+    uint16_t fifo_count = ((uint16_t)pdu[3] << 8) | pdu[4];
+    /* byte count = count field (2) + register bytes (2N); count <= 31 (spec) */
+    if (fifo_count > 31U || byte_count != (2U + 2U * fifo_count) ||
+        pdu_len != (5U + 2U * fifo_count)) {
+        return MODBUS_ERROR;
+    }
+    if (fifo_count > regs_max) {
+        return MODBUS_ERROR;
+    }
+    for (uint16_t i = 0; i < fifo_count; i++) {
+        regs_out[i] = ((uint16_t)pdu[5U + i * 2U] << 8) | pdu[5U + i * 2U + 1U];
+    }
+    *count_out = (uint8_t)fifo_count;
     return MODBUS_OK;
 }
 
@@ -1184,4 +1296,92 @@ modbus_status_t modbus_master_read_device_identification(
         return st;
     }
     return modbus_master_parse_device_id(resp, resp_len, out);
+}
+
+/* ============================================================
+ * FC 0x11 / 0x16 / 0x18
+ * ============================================================ */
+
+modbus_status_t modbus_master_report_server_id(uint8_t slave, uint8_t *id_out,
+                                               uint8_t id_max, uint8_t *id_len_out,
+                                               uint8_t *run_status_out,
+                                               uint8_t *exception_code)
+{
+    uint8_t req[1];
+    uint8_t resp[MODBUS_RTU_FRAME_MAX];
+    uint16_t resp_len = 0U;
+    uint16_t req_len;
+    modbus_status_t st;
+
+    /* FC 0x11 is not broadcast-executable */
+    if (slave == 0U) {
+        return MODBUS_ERROR;
+    }
+    req_len = modbus_master_build_report_server_id(req, sizeof(req));
+    if (req_len == 0U) {
+        return MODBUS_ERROR;
+    }
+    st = master_xact_and_check_echo_addr(slave, req, req_len, resp, &resp_len,
+                                         sizeof(resp), exception_code);
+    if (st != MODBUS_OK) {
+        return st;
+    }
+    return modbus_master_parse_report_server_id(resp, resp_len, id_out, id_max,
+                                                id_len_out, run_status_out);
+}
+
+modbus_status_t modbus_master_mask_write_register(uint8_t slave, uint16_t addr,
+                                                  uint16_t and_mask,
+                                                  uint16_t or_mask,
+                                                  uint8_t *exception_code)
+{
+    uint8_t req[7];
+    uint8_t resp[MODBUS_RTU_FRAME_MAX];
+    uint16_t resp_len = 0U;
+    uint16_t req_len;
+    modbus_status_t st;
+
+    req_len = modbus_master_build_mask_write_register(addr, and_mask, or_mask,
+                                                      req, sizeof(req));
+    if (req_len == 0U) {
+        return MODBUS_ERROR;
+    }
+    st = master_xact_and_check_echo_addr(slave, req, req_len, resp, &resp_len,
+                                         sizeof(resp), exception_code);
+    if (st != MODBUS_OK) {
+        return st;
+    }
+    if (slave == 0U) {
+        return MODBUS_OK; /* broadcast: write executed, no response */
+    }
+    /* Normal response is an echo of the request */
+    return modbus_master_parse_echo(resp, resp_len, req, req_len);
+}
+
+modbus_status_t modbus_master_read_fifo_queue(uint8_t slave, uint16_t fifo_addr,
+                                              uint16_t *regs_out, uint8_t regs_max,
+                                              uint8_t *count_out,
+                                              uint8_t *exception_code)
+{
+    uint8_t req[3];
+    uint8_t resp[MODBUS_RTU_FRAME_MAX];
+    uint16_t resp_len = 0U;
+    uint16_t req_len;
+    modbus_status_t st;
+
+    /* FC 0x18 is a read function: not broadcast-executable */
+    if (slave == 0U) {
+        return MODBUS_ERROR;
+    }
+    req_len = modbus_master_build_read_fifo_queue(fifo_addr, req, sizeof(req));
+    if (req_len == 0U) {
+        return MODBUS_ERROR;
+    }
+    st = master_xact_and_check_echo_addr(slave, req, req_len, resp, &resp_len,
+                                         sizeof(resp), exception_code);
+    if (st != MODBUS_OK) {
+        return st;
+    }
+    return modbus_master_parse_read_fifo_queue(resp, resp_len, regs_out,
+                                               regs_max, count_out);
 }
