@@ -36,6 +36,31 @@ st = modbus_master_read_device_identification(2, MODBUS_DEVID_BASIC, 0, &id, &ex
 
 Supported master function codes: **0x01–0x08, 0x0F, 0x10, 0x14, 0x15, 0x17, 0x2B/0x0E**. FC 0x08 (Diagnostics) is serial-line only (RTU); Modbus TCP rejects it with exception 01 as specified.
 
+The slave side also answers **FC 0x0B Get Comm Event Counter** and **FC 0x0C Get Comm Event Log** on RTU (broadcasts are silently ignored; TCP rejects both with exception 01). The event log is a 64-entry ring (most recent first); `FC 0x08` sub-function `0x01` Restart Communications with data `0xFF00` additionally clears it.
+
+## Master demo
+
+`src/main.c` ships with a small **master demo** (enabled by default) that exercises the master API against a *second* Modbus slave on the same RS485 bus. Configuration lives in `inc/board_config.h`:
+
+```c
+#define MODBUS_MASTER_DEMO      1      /* 0 = compiled out                */
+#define MASTER_DEMO_SLAVE_ID    2U     /* remote slave to poll            */
+#define MASTER_DEMO_PERIOD_MS   2000U  /* pause between demo sequences    */
+```
+
+`MASTER_DEMO_SLAVE_ID` must differ from the local `MODBUS_RTU_ADDRESS` (compile-time checked). To try it, flash a second board (or any Modbus RTU slave) with slave ID 2 and connect both A/B pairs in parallel on the same bus.
+
+Every `MASTER_DEMO_PERIOD_MS` the demo runs, non-blocking gated from the main loop:
+
+1. Read 2 holding registers (address 0) from the remote slave
+2. Write single register 0 with a running sequence value
+3. Read it back
+4. FC 0x08 Return Query Data echo (`0xA5A5`)
+
+Results land in debugger-inspectable volatile globals in `main.c`: `master_demo_ok_count`, `master_demo_err_count`, `master_demo_last_status`, `master_demo_last_exception`, `master_demo_last_regs[2]`, `master_demo_write_value`, `master_demo_diag_echo`. Failures are non-fatal — the error counter bumps and the local slave keeps answering.
+
+UART sharing needs no extra code: each master transaction waits up to the transport timeout (500 ms default), and while it is armed (`modbus_master_rtu_is_waiting`) the RS485 RX path routes incoming frames to the master's own buffer instead of the slave path, so the two roles never corrupt each other.
+
 ## Modbus Register Map
 
 | Type               | Address Range | Description               |

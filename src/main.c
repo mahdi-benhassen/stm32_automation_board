@@ -7,6 +7,96 @@ static void rs485_modbus_rx_callback(uint8_t *data, uint16_t len);
 static void rs232_modbus_rx_callback(uint8_t *data, uint16_t len);
 static void eth_modbus_callback(uint8_t *data, uint16_t len);
 
+/* ============================================================
+ * Modbus Master Demo (issue #9) — see board_config.h for the defines.
+ *
+ * Every MASTER_DEMO_PERIOD_MS, runs a compact master sequence against a
+ * REMOTE slave on the RS485 bus using the real public master API:
+ * read holding registers → write single register → read back →
+ * FC 0x08 Return Query Data echo. Results are stored in the volatile
+ * master_demo_* variables below (debugger-inspectable); failures just
+ * bump master_demo_err_count and the local slave keeps working.
+ *
+ * UART sharing: the existing modbus_master_rtu transport already
+ * serializes master vs slave on the bus — while a transaction is armed
+ * (modbus_master_rtu_is_waiting), the RS485 RX callback routes frames to
+ * the master's own buffer instead of the slave path, so neither side can
+ * corrupt the other's buffers. The demo reuses that mechanism as-is.
+ * ============================================================ */
+#if MODBUS_MASTER_DEMO
+
+#if (MASTER_DEMO_SLAVE_ID == MODBUS_RTU_ADDRESS)
+#error "MASTER_DEMO_SLAVE_ID must differ from the local MODBUS_RTU_ADDRESS"
+#endif
+
+volatile uint32_t        master_demo_ok_count = 0;
+volatile uint32_t        master_demo_err_count = 0;
+volatile modbus_status_t master_demo_last_status = MODBUS_OK;
+volatile uint8_t         master_demo_last_exception = 0;
+volatile uint16_t        master_demo_last_regs[2] = {0U, 0U};
+volatile uint16_t        master_demo_write_value = 0U;
+volatile uint16_t        master_demo_diag_echo = 0U;
+
+static uint32_t master_demo_last_run = 0;
+static uint16_t master_demo_seq = 0;
+
+static void master_demo_run(void)
+{
+    uint8_t exc = 0;
+    uint16_t regs[2] = {0U, 0U};
+    uint16_t echo = 0;
+    modbus_status_t st;
+
+    /* 1) Read 2 holding registers from the remote slave */
+    st = modbus_master_read_holding_registers(MASTER_DEMO_SLAVE_ID, 0, 2,
+                                              regs, &exc);
+    master_demo_last_status = st;
+    master_demo_last_exception = exc;
+    if (st != MODBUS_OK) {
+        master_demo_err_count++;
+        return;
+    }
+    master_demo_last_regs[0] = regs[0];
+    master_demo_last_regs[1] = regs[1];
+
+    /* 2) Write single register (running sequence value) */
+    master_demo_write_value = master_demo_seq++;
+    st = modbus_master_write_single_register(MASTER_DEMO_SLAVE_ID, 0,
+                                             master_demo_write_value, &exc);
+    master_demo_last_status = st;
+    master_demo_last_exception = exc;
+    if (st != MODBUS_OK) {
+        master_demo_err_count++;
+        return;
+    }
+
+    /* 3) Read it back */
+    st = modbus_master_read_holding_registers(MASTER_DEMO_SLAVE_ID, 0, 1,
+                                              regs, &exc);
+    master_demo_last_status = st;
+    master_demo_last_exception = exc;
+    if (st != MODBUS_OK) {
+        master_demo_err_count++;
+        return;
+    }
+    master_demo_last_regs[0] = regs[0];
+
+    /* 4) FC 0x08 sub 0x00 Return Query Data (diag echo) */
+    st = modbus_master_diag_query_data(MASTER_DEMO_SLAVE_ID, 0xA5A5U,
+                                       &echo, &exc);
+    master_demo_last_status = st;
+    master_demo_last_exception = exc;
+    if (st != MODBUS_OK || echo != 0xA5A5U) {
+        master_demo_err_count++;
+        return;
+    }
+    master_demo_diag_echo = echo;
+
+    master_demo_ok_count++;
+}
+
+#endif /* MODBUS_MASTER_DEMO */
+
 void SysTick_Handler(void)
 {
     /*
@@ -112,6 +202,16 @@ int main(void)
 
         /* Process RS485 (handled via interrupt + callback) */
         rs485_process();
+
+#if MODBUS_MASTER_DEMO
+        /* Modbus master demo sequence, gated by the configured period.
+         * The gate is non-blocking; each transaction then waits with the
+         * transport timeout while rs485_process() keeps servicing the UART */
+        if ((now - master_demo_last_run) >= MASTER_DEMO_PERIOD_MS) {
+            master_demo_last_run = now;
+            master_demo_run();
+        }
+#endif
 
         /* Process RS232 (handled via interrupt + callback) */
         rs232_process();
