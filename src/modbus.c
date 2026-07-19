@@ -795,7 +795,7 @@ modbus_status_t modbus_rtu_process(uint8_t *rx_buf, uint16_t rx_len,
     uint8_t *rx_pdu = &rx_buf[1];
     uint16_t rx_pdu_len = rx_len - 3;
 
-    uint8_t tx_pdu[MODBUS_RTU_FRAME_MAX];
+    uint8_t tx_pdu[MODBUS_RTU_FRAME_MAX] = {0};
     uint16_t tx_pdu_len = 0;
 
     /*
