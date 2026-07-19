@@ -46,8 +46,8 @@
 #define DO_PIN_4            GPIO_PIN_8
 #define DO_PIN_5            GPIO_PIN_9
 #define DO_PIN_6            GPIO_PIN_10
-#define DO_PIN_7            GPIO_PIN_12
-#define DO_PIN_MASK         0x1763U
+#define DO_PIN_7            GPIO_PIN_7
+#define DO_PIN_MASK         0x07E3U
 #define DO_COUNT            8
 
 /* ============================================================
