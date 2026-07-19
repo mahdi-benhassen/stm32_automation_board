@@ -4,6 +4,7 @@
 volatile uint32_t sys_tick = 0;
 
 static void rs485_modbus_rx_callback(uint8_t *data, uint16_t len);
+static void rs232_modbus_rx_callback(uint8_t *data, uint16_t len);
 static void eth_modbus_callback(uint8_t *data, uint16_t len);
 
 void SysTick_Handler(void)
@@ -14,8 +15,9 @@ void SysTick_Handler(void)
      */
     (void)SysTick->CTRL;
     sys_tick++;
-    /* Modbus RTU T3.5 soft timeout (portable SysTick timebase, no TIM6) */
+    /* Modbus RTU T3.5 soft timeouts (portable SysTick timebase, no TIM6) */
     rs485_on_systick();
+    rs232_on_systick();
 }
 
 uint32_t HAL_GetTick(void)
@@ -73,6 +75,7 @@ int main(void)
     analog_inputs_init();
     analog_outputs_init();
     rs485_init(RS485_BAUDRATE);
+    rs232_init(RS232_BAUDRATE);
     ethernet_init();
 
     /* Initialize Modbus stacks (slave + master share RS485) */
@@ -82,6 +85,7 @@ int main(void)
 
     /* Set callback handlers */
     rs485_set_rx_callback(rs485_modbus_rx_callback);
+    rs232_set_rx_callback(rs232_modbus_rx_callback);
     ethernet_set_rx_callback(eth_modbus_callback);
 
     /* Set initial analog output to 0V */
@@ -108,6 +112,9 @@ int main(void)
 
         /* Process RS485 (handled via interrupt + callback) */
         rs485_process();
+
+        /* Process RS232 (handled via interrupt + callback) */
+        rs232_process();
 
         /* Process Ethernet frames */
         ethernet_process();
@@ -137,6 +144,23 @@ static void rs485_modbus_rx_callback(uint8_t *data, uint16_t len)
         rs485_set_tx_mode();
         rs485_send(response, resp_len);
         rs485_set_rx_mode();
+    }
+}
+
+/*
+ * RS232 is slave-only (v1) and shares modbus_slave_id with RS485/TCP —
+ * one Modbus identity on every interface. Full-duplex link, but the
+ * T3.5 turnaround is kept (spec does not relax it for full-duplex).
+ */
+static void rs232_modbus_rx_callback(uint8_t *data, uint16_t len)
+{
+    uint8_t response[MODBUS_RTU_FRAME_MAX];
+    uint16_t resp_len = 0;
+
+    modbus_rtu_process(data, len, response, &resp_len);
+    if (resp_len > 0) {
+        rs232_delay_t35();
+        rs232_send(response, resp_len);
     }
 }
 

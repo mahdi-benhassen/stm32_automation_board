@@ -58,6 +58,7 @@ set(APP_SOURCES
     "src/analog_io.c"
     "src/relay.c"
     "src/rs485.c"
+    "src/rs232.c"
     "src/ethernet.c"
     "src/modbus.c"
     "src/modbus_diag.c"

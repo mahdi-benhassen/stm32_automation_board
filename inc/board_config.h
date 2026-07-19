@@ -146,6 +146,23 @@
 #define RS485_RX_ENABLE()   do { RS485_DE_PORT->BSRR = (uint32_t)RS485_DE_PIN << 16U; } while(0)
 
 /* ============================================================
+ * RS232 Interface - USART1
+ * Full-duplex point-to-point (no DE/RE direction control)
+ * ============================================================ */
+#define RS232_USART         USART1
+#define RS232_USART_CLK_ENABLE() __HAL_RCC_USART1_CLK_ENABLE()
+#define RS232_BAUDRATE      115200U
+#define RS232_TX_PORT       GPIOA
+#define RS232_TX_PIN        GPIO_PIN_9
+#define RS232_RX_PORT       GPIOA
+#define RS232_RX_PIN        GPIO_PIN_10
+#define RS232_GPIO_CLK_ENABLE() __HAL_RCC_GPIOA_CLK_ENABLE()
+#define RS232_AF            GPIO_AF7_USART1
+
+#define RS232_BUFFER_SIZE   256
+#define RS232_TIMEOUT_MS    50
+
+/* ============================================================
  * Ethernet Interface (RMII)
  * STM32F407 built-in MAC + external PHY (LAN8720/DP83848)
  * ============================================================ */
