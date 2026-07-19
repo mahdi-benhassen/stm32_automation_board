@@ -37,6 +37,8 @@ static void status_led_timer_callback(TimerHandle_t xTimer)
 
 /* RTU frames: slave path uses rs485_rx_queue; master uses master_rx_queue */
 static QueueHandle_t master_rx_queue = NULL;
+/* RS232 slave port: own queue (full-duplex link, independent of RS485) */
+static QueueHandle_t rs232_rx_queue = NULL;
 
 static void rs485_modbus_callback(uint8_t *data, uint16_t len)
 {
@@ -57,6 +59,27 @@ static void rs485_modbus_callback(uint8_t *data, uint16_t len)
         (void)xQueueSend(master_rx_queue, &frame, 0);
     } else if (rs485_rx_queue) {
         (void)xQueueSend(rs485_rx_queue, &frame, 0);
+    }
+}
+
+/*
+ * RS232 is slave-only (v1) and shares the Modbus slave ID with RS485/TCP —
+ * one Modbus identity on every interface. No master route here; frames are
+ * simply queued for modbus_rtu_task.
+ */
+static void rs232_modbus_callback(uint8_t *data, uint16_t len)
+{
+    modbus_rtu_frame_t frame;
+    if (len > MODBUS_RTU_FRAME_MAX) {
+        len = MODBUS_RTU_FRAME_MAX;
+    }
+    for (uint16_t i = 0; i < len; i++) {
+        frame.data[i] = data[i];
+    }
+    frame.len = len;
+
+    if (rs232_rx_queue) {
+        (void)xQueueSend(rs232_rx_queue, &frame, 0);
     }
 }
 
@@ -100,6 +123,7 @@ static void modbus_rtu_task(void *pvParameters)
     for (;;) {
         /* Poll framing often enough for T3.5 end-of-frame (sub-ms at high baud) */
         rs485_process();
+        rs232_process();
         /* Skip slave handling while master owns the bus (responses go to master queue) */
         if (modbus_master_rtu_is_waiting()) {
             vTaskDelay(pdMS_TO_TICKS(1));
@@ -117,6 +141,23 @@ static void modbus_rtu_task(void *pvParameters)
                     rs485_set_rx_mode();
                     xSemaphoreGive(rs485_tx_mutex);
                 }
+            }
+        }
+        /*
+         * RS232 slave port: independent full-duplex link, serviced every
+         * iteration (not gated on the RS485 master-wait state). Only this
+         * task transmits on RS232, so no TX mutex is needed; modbus_mutex
+         * still serializes the shared register map during PDU processing.
+         */
+        if (xQueueReceive(rs232_rx_queue, &rx_frame, 0) == pdTRUE) {
+            xSemaphoreTake(modbus_mutex, portMAX_DELAY);
+            resp_len = 0;
+            modbus_rtu_process(rx_frame.data, rx_frame.len, response, &resp_len);
+            xSemaphoreGive(modbus_mutex);
+            if (resp_len > 0) {
+                /* T3.5 turnaround kept: spec does not relax it for full-duplex */
+                rs232_delay_t35();
+                rs232_send(response, resp_len);
             }
         }
         checkin_modbus_rtu = 1;
@@ -162,6 +203,7 @@ void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
 void vApplicationTickHook(void)
 {
     rs485_on_systick();
+    rs232_on_systick();
 }
 
 static void iwdg_init(void)
@@ -223,6 +265,7 @@ int main(void)
     analog_inputs_init();
     analog_outputs_init();
     rs485_init(RS485_BAUDRATE);
+    rs232_init(RS232_BAUDRATE);
     /* MAC init early; lwIP netif attaches after scheduler starts (net_init) */
     ethernet_init();
 
@@ -236,8 +279,10 @@ int main(void)
     modbus_mutex   = xSemaphoreCreateMutex();
     rs485_rx_queue = xQueueCreate(8, sizeof(modbus_rtu_frame_t));
     master_rx_queue = xQueueCreate(4, sizeof(modbus_rtu_frame_t));
+    rs232_rx_queue = xQueueCreate(4, sizeof(modbus_rtu_frame_t));
 
-    if (!rs485_tx_mutex || !modbus_mutex || !rs485_rx_queue || !master_rx_queue) {
+    if (!rs485_tx_mutex || !modbus_mutex || !rs485_rx_queue || !master_rx_queue ||
+        !rs232_rx_queue) {
         __disable_irq();
         for (;;) {
             __NOP();
@@ -245,6 +290,7 @@ int main(void)
     }
 
     rs485_set_rx_callback(rs485_modbus_callback);
+    rs232_set_rx_callback(rs232_modbus_callback);
     /* Dual-role RS485: slave remains active; master API shares the bus */
     modbus_master_rtu_init(rs485_tx_mutex, master_rx_queue);
     modbus_tcp_server_set_checkin(tcp_watchdog_checkin);
