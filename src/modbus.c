@@ -14,6 +14,10 @@ static uint8_t  discrete_bits[(MODBUS_MAX_COILS + 7) / 8] = {0};
 /* Virtual files for FC 0x14 / 0x15 (file numbers 1..MODBUS_FILE_COUNT) */
 static uint16_t file_store[MODBUS_FILE_COUNT][MODBUS_FILE_SIZE_REGS];
 
+/* Generic FIFO queues for FC 0x18 (no hardware FIFOs on this board) */
+static uint16_t fifo_store[MODBUS_FIFO_COUNT][MODBUS_FIFO_DEPTH];
+static uint8_t  fifo_len[MODBUS_FIFO_COUNT];
+
 static uint16_t low_crc_table[256];
 static uint16_t high_crc_table[256];
 static uint8_t  crc_table_initialized = 0;
@@ -113,6 +117,9 @@ void modbus_rtu_init(uint8_t slave_id)
             file_store[f][r] = 0;
         }
     }
+    for (uint16_t f = 0; f < MODBUS_FIFO_COUNT; f++) {
+        fifo_len[f] = 0;
+    }
 }
 
 static uint8_t modbus_bit_read(uint8_t *table, uint16_t addr)
@@ -160,7 +167,49 @@ static uint8_t modbus_broadcast_function_supported(uint8_t function_code)
             function_code == MODBUS_FC_WRITE_MULTIPLE_COILS ||
             function_code == MODBUS_FC_WRITE_MULTIPLE_REGISTERS ||
             function_code == MODBUS_FC_WRITE_FILE_RECORD ||
+            function_code == MODBUS_FC_MASK_WRITE_REGISTER ||
             function_code == MODBUS_FC_READ_WRITE_MULTIPLE_REGS);
+}
+
+uint8_t modbus_fifo_push(uint16_t fifo_addr, uint16_t value)
+{
+    if (fifo_addr >= MODBUS_FIFO_COUNT) {
+        return 0U;
+    }
+    if (fifo_len[fifo_addr] >= MODBUS_FIFO_DEPTH) {
+        return 0U; /* full: push rejected, queue left unchanged */
+    }
+    fifo_store[fifo_addr][fifo_len[fifo_addr]] = value;
+    fifo_len[fifo_addr]++;
+    return 1U;
+}
+
+/*
+ * FC 0x11 Report Server ID (serial line only, V1.1b3 §6.13).
+ * Response: FC + byte count + server ID (device-specific) + run indicator
+ * status (0xFF = ON). No additional data beyond that. The request is FC
+ * only; extra bytes are rejected with exception 03 (mirrors 0x0B/0x0C).
+ */
+static const char modbus_server_id[] = MODBUS_SERVER_ID;
+
+_Static_assert(sizeof(modbus_server_id) + 1U <= 256U,
+               "MODBUS_SERVER_ID too long for the 0x11 byte-count field");
+
+static uint16_t modbus_report_server_id_process(uint16_t rx_pdu_len,
+                                                uint8_t *tx_pdu)
+{
+    if (rx_pdu_len != 1U) {
+        return modbus_exception_response(MODBUS_FC_REPORT_SERVER_ID,
+                                         MODBUS_EXC_ILLEGAL_DATA_VALUE, tx_pdu);
+    }
+    uint8_t id_len = (uint8_t)(sizeof(modbus_server_id) - 1U);
+    tx_pdu[0] = MODBUS_FC_REPORT_SERVER_ID;
+    tx_pdu[1] = (uint8_t)(id_len + 1U); /* ID + run indicator */
+    for (uint8_t i = 0; i < id_len; i++) {
+        tx_pdu[2U + i] = (uint8_t)modbus_server_id[i];
+    }
+    tx_pdu[2U + id_len] = 0xFFU; /* run indicator: ON */
+    return (uint16_t)(3U + id_len);
 }
 
 static uint8_t modbus_file_index_valid(uint16_t file_number)
@@ -622,6 +671,73 @@ modbus_status_t modbus_pdu_process(uint8_t *rx_pdu, uint16_t rx_pdu_len,
         break;
     }
 
+    /* ---- FC 0x16 Mask Write Register (V1.1b3 §6.16) ---- */
+    case MODBUS_FC_MASK_WRITE_REGISTER: {
+        if (rx_pdu_len != 7U) {
+            pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_DATA_VALUE, tx_pdu);
+            break;
+        }
+        {
+            uint16_t and_mask = ((uint16_t)rx_pdu[3] << 8) | rx_pdu[4];
+            uint16_t or_mask  = ((uint16_t)rx_pdu[5] << 8) | rx_pdu[6];
+
+            if (!modbus_address_range_valid(start_addr, 1U, MODBUS_MAX_REGISTERS)) {
+                pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_DATA_ADDRESS, tx_pdu);
+                break;
+            }
+            /* Result = (Current AND And_Mask) OR (Or_Mask AND (NOT And_Mask)) */
+            uint16_t cur = holding_regs[MODBUS_HOLDING_REG_OFFSET + start_addr];
+            uint16_t result = (uint16_t)((cur & and_mask) | (or_mask & (uint16_t)~and_mask));
+            modbus_regs_write(holding_regs, MODBUS_HOLDING_REG_OFFSET + start_addr, result);
+            modbus_sync_registers();
+
+            /* Normal response is an echo of the request */
+            for (uint16_t i = 0; i < 7U; i++) {
+                tx_pdu[i] = rx_pdu[i];
+            }
+            pdu_len = 7;
+        }
+        break;
+    }
+
+    /* ---- FC 0x18 Read FIFO Queue (V1.1b3 §6.18) ---- */
+    case MODBUS_FC_READ_FIFO_QUEUE: {
+        if (rx_pdu_len != 3U) {
+            pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_DATA_VALUE, tx_pdu);
+            break;
+        }
+        /* NB: the shared start_addr is only parsed for 5+-byte PDUs; the
+         * FIFO pointer address must be taken from the raw request here. */
+        uint16_t fifo_addr = ((uint16_t)rx_pdu[1] << 8) | rx_pdu[2];
+        if (fifo_addr >= MODBUS_FIFO_COUNT) {
+            /* Undefined FIFO pointer */
+            pdu_len = modbus_exception_response(func_code, MODBUS_EXC_ILLEGAL_DATA_ADDRESS, tx_pdu);
+            break;
+        }
+        /*
+         * fifo_len can never exceed 31 (MODBUS_FIFO_DEPTH, the spec max),
+         * so the spec's exception 03 for FIFO count > 31 cannot occur.
+         * The read reports the queue oldest-first and does NOT clear it
+         * (spec: "reads the queue contents, but does not clear them").
+         * An empty queue is a normal response with FIFO count 0.
+         */
+        {
+            uint8_t count = fifo_len[fifo_addr];
+            tx_pdu[0] = func_code;
+            tx_pdu[1] = 0x00U;                    /* byte count hi (2 + 2N) */
+            tx_pdu[2] = (uint8_t)(2U + 2U * count); /* byte count lo */
+            tx_pdu[3] = 0x00U;                    /* FIFO count hi */
+            tx_pdu[4] = count;                    /* FIFO count lo */
+            for (uint8_t i = 0; i < count; i++) {
+                uint16_t val = fifo_store[fifo_addr][i];
+                tx_pdu[5U + i * 2U]     = (uint8_t)(val >> 8);
+                tx_pdu[5U + i * 2U + 1U] = (uint8_t)(val & 0xFFU);
+            }
+            pdu_len = (uint16_t)(5U + 2U * count);
+        }
+        break;
+    }
+
     /* ---- FC 0x17 Read/Write Multiple Registers (V1.1b3 §6.17) ---- */
     case MODBUS_FC_READ_WRITE_MULTIPLE_REGS: {
         if (rx_pdu_len < 10U) {
@@ -816,10 +932,10 @@ modbus_status_t modbus_rtu_process(uint8_t *rx_buf, uint16_t rx_len,
     }
 
     /*
-     * FC 0x08 Diagnostics and FC 0x0B/0x0C Comm Event Counter/Log are
-     * serial-line only: intercept them here, before the shared PDU
-     * dispatcher. Modbus TCP needs no change — its modbus_pdu_process()
-     * default: path rejects all three as Illegal Function.
+     * FC 0x08 Diagnostics, FC 0x0B/0x0C Comm Event Counter/Log and FC 0x11
+     * Report Server ID are serial-line only: intercept them here, before
+     * the shared PDU dispatcher. Modbus TCP needs no change — its
+     * modbus_pdu_process() default: path rejects them as Illegal Function.
      */
     if (fc == MODBUS_FC_DIAGNOSTICS) {
         tx_pdu_len = modbus_diag_process(rx_pdu, rx_pdu_len, tx_pdu, is_broadcast);
@@ -829,6 +945,14 @@ modbus_status_t modbus_rtu_process(uint8_t *rx_buf, uint16_t rx_len,
             tx_pdu_len = 0;
         } else {
             tx_pdu_len = modbus_event_process(rx_pdu, rx_pdu_len, tx_pdu, is_broadcast);
+        }
+    } else if (fc == MODBUS_FC_REPORT_SERVER_ID) {
+        if (modbus_diag_listen_only() || is_broadcast) {
+            /* Listen-only: monitored, never answered.
+             * Broadcast: silently ignored (not broadcast-executable). */
+            tx_pdu_len = 0;
+        } else {
+            tx_pdu_len = modbus_report_server_id_process(rx_pdu_len, tx_pdu);
         }
     } else if (modbus_diag_listen_only()) {
         /* Listen-only: messages are monitored, but no action is taken and
@@ -868,6 +992,9 @@ modbus_status_t modbus_rtu_process(uint8_t *rx_buf, uint16_t rx_len,
      *    completion (normal response, or broadcast executed silently);
      *    never for exception responses, fetch commands, listen-only
      *    monitoring, or the counter-resetting diag commands.
+     * FC 0x11 Report Server ID is NOT one of the spec's excluded commands
+     * (§6.9 excludes only poll/fetch-event-counter commands), so a
+     * successful 0x11 response counts and logs like any normal response.
      */
     if (!is_fetch && responded) {
         modbus_event_note_tx(exception_raised ? tx_pdu[1] : 0U);

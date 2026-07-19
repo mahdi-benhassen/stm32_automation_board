@@ -1297,6 +1297,573 @@ static void test_tcp_rejects_fc0b_fc0c(void)
 }
 
 /* ============================================================
+ * FC 0x11 Report Server ID — slave (serial line only, §6.13)
+ * ============================================================ */
+
+/* Send one FC 0x11 request (FC-only PDU) through the real slave. */
+static modbus_status_t server_id_request(uint8_t slave,
+                                         uint8_t *tx, uint16_t *tx_len)
+{
+    uint8_t pdu[1] = {MODBUS_FC_REPORT_SERVER_ID};
+    uint8_t adu[4];
+    uint16_t adu_len = rtu_build_adu(slave, pdu, 1, adu);
+    return modbus_rtu_process(adu, adu_len, tx, tx_len);
+}
+
+static void test_server_id_response_layout(void)
+{
+    uint8_t tx[MODBUS_RTU_FRAME_MAX];
+    uint16_t tx_len = 0;
+    static const char expect_id[] = MODBUS_SERVER_ID; /* tracks the config define */
+    const uint16_t id_len = (uint16_t)(sizeof(expect_id) - 1U);
+    uint16_t crc;
+    TEST("FC 0x11 response layout: FC + byte count + ID + run indicator 0xFF");
+    modbus_rtu_init(1);
+
+    ASSERT_EQ(server_id_request(1, tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(tx_len, (uint16_t)(3U + id_len + 3U)); /* PDU + addr + CRC */
+    ASSERT_EQ(tx[0], 1);
+    ASSERT_EQ(tx[1], MODBUS_FC_REPORT_SERVER_ID);
+    ASSERT_EQ(tx[2], (uint8_t)(id_len + 1U)); /* byte count = ID + run ind. */
+    for (uint16_t i = 0; i < id_len; i++) {
+        ASSERT_EQ(tx[3U + i], (uint8_t)expect_id[i]);
+    }
+    ASSERT_EQ(tx[3U + id_len], 0xFF); /* run indicator: ON */
+    crc = modbus_crc16(tx, (uint16_t)(tx_len - 2U));
+    ASSERT_EQ(tx[tx_len - 2U], (uint8_t)(crc & 0xFFU));
+    ASSERT_EQ(tx[tx_len - 1U], (uint8_t)(crc >> 8));
+    PASS();
+}
+
+static void test_server_id_counts_as_success(void)
+{
+    uint8_t tx[MODBUS_RTU_FRAME_MAX];
+    uint16_t tx_len = 0;
+    TEST("FC 0x11 success bumps the comm event counter (§6.9 exclusion list)");
+    modbus_rtu_init(1);
+
+    ASSERT_EQ(server_id_request(1, tx, &tx_len), MODBUS_OK);
+    ASSERT_TRUE(tx_len > 0U);
+    ASSERT_EQ(event_request(1, MODBUS_FC_GET_COMM_EVENT_COUNTER, tx, &tx_len),
+              MODBUS_OK);
+    ASSERT_EQ((tx[4] << 8) | tx[5], 1);
+    PASS();
+}
+
+static void test_server_id_broadcast_ignored(void)
+{
+    uint8_t tx[MODBUS_RTU_FRAME_MAX];
+    uint16_t tx_len = 0;
+    TEST("broadcast FC 0x11 silently ignored, not counted");
+    modbus_rtu_init(1);
+
+    ASSERT_EQ(server_id_request(0, tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(tx_len, 0);
+    ASSERT_EQ(event_request(1, MODBUS_FC_GET_COMM_EVENT_COUNTER, tx, &tx_len),
+              MODBUS_OK);
+    ASSERT_EQ((tx[4] << 8) | tx[5], 0);
+    PASS();
+}
+
+static void test_server_id_rejects_extra_data(void)
+{
+    uint8_t tx[MODBUS_RTU_FRAME_MAX];
+    uint16_t tx_len = 0;
+    uint8_t pdu[2] = {MODBUS_FC_REPORT_SERVER_ID, 0x00};
+    uint8_t adu[8];
+    uint16_t adu_len;
+    TEST("FC 0x11 with extra request data -> exception 03");
+    modbus_rtu_init(1);
+
+    adu_len = rtu_build_adu(1, pdu, 2, adu);
+    ASSERT_EQ(modbus_rtu_process(adu, adu_len, tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(tx_len, 5); /* addr + exception PDU + CRC */
+    ASSERT_EQ(tx[1], (uint8_t)(MODBUS_FC_REPORT_SERVER_ID | 0x80U));
+    ASSERT_EQ(tx[2], MODBUS_EXC_ILLEGAL_DATA_VALUE);
+    PASS();
+}
+
+static void test_tcp_rejects_fc11(void)
+{
+    /* MBAP: tid, pid=0, len=2 (unit + 1-byte PDU), unit=1; PDU = FC only */
+    uint8_t rx11[10] = {0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0x01, 0x11};
+    uint8_t tx[MODBUS_TCP_MAX_ADU];
+    uint16_t tx_len = 0;
+    TEST("TCP rejects FC 0x11 with exception 01 (serial-line only)");
+    modbus_rtu_init(1);
+    modbus_tcp_init(1);
+
+    ASSERT_EQ(modbus_tcp_build_response(rx11, 8, tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(tx_len, 9); /* MBAP(7) + exception PDU(2) */
+    ASSERT_EQ(tx[7], 0x91);
+    ASSERT_EQ(tx[8], MODBUS_EXC_ILLEGAL_FUNCTION);
+    PASS();
+}
+
+/* ============================================================
+ * FC 0x16 Mask Write Register — slave (§6.16, RTU + TCP)
+ * ============================================================ */
+
+/* Send one FC 0x16 request through the real slave. */
+static modbus_status_t mask_write_request(uint8_t slave, uint16_t addr,
+                                          uint16_t and_mask, uint16_t or_mask,
+                                          uint8_t *tx, uint16_t *tx_len)
+{
+    uint8_t pdu[7] = {
+        MODBUS_FC_MASK_WRITE_REGISTER,
+        (uint8_t)(addr >> 8), (uint8_t)(addr & 0xFFU),
+        (uint8_t)(and_mask >> 8), (uint8_t)(and_mask & 0xFFU),
+        (uint8_t)(or_mask >> 8), (uint8_t)(or_mask & 0xFFU)
+    };
+    uint8_t adu[16];
+    uint16_t adu_len = rtu_build_adu(slave, pdu, 7, adu);
+    return modbus_rtu_process(adu, adu_len, tx, tx_len);
+}
+
+static void test_mask_write_spec_example(void)
+{
+    uint8_t tx[MODBUS_RTU_FRAME_MAX];
+    uint16_t tx_len = 0;
+    TEST("FC 0x16 spec example: cur 0x12, AND 0xF2, OR 0x25 -> 0x17, echo");
+    modbus_rtu_init(1);
+    modbus_write_holding_register(4, 0x0012); /* spec: register 5 = addr 4 */
+
+    ASSERT_EQ(mask_write_request(1, 4, 0x00F2, 0x0025, tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(tx_len, 10); /* addr + 7-byte echo PDU + CRC */
+    ASSERT_EQ(tx[1], MODBUS_FC_MASK_WRITE_REGISTER);
+    ASSERT_EQ(tx[2], 0x00);
+    ASSERT_EQ(tx[3], 0x04);
+    ASSERT_EQ(tx[4], 0x00);
+    ASSERT_EQ(tx[5], 0xF2);
+    ASSERT_EQ(tx[6], 0x00);
+    ASSERT_EQ(tx[7], 0x25);
+    /* (0x12 & 0xF2) | (0x25 & ~0xF2) = 0x12 | 0x05 = 0x17 */
+    ASSERT_EQ(modbus_read_holding_register(4), 0x0017);
+    PASS();
+}
+
+static void test_mask_write_edge_masks(void)
+{
+    uint8_t tx[MODBUS_RTU_FRAME_MAX];
+    uint16_t tx_len = 0;
+    TEST("FC 0x16 edge masks: AND=0 -> OR value; OR=0 -> cur & AND");
+    modbus_rtu_init(1);
+
+    /* And_Mask = 0: result equals Or_Mask (spec note) */
+    modbus_write_holding_register(10, 0x1234);
+    ASSERT_EQ(mask_write_request(1, 10, 0x0000, 0xABCD, tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(modbus_read_holding_register(10), 0xABCD);
+
+    /* Or_Mask = 0: result is Current AND And_Mask (spec note) */
+    modbus_write_holding_register(10, 0x1234);
+    ASSERT_EQ(mask_write_request(1, 10, 0x0F0F, 0x0000, tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(modbus_read_holding_register(10), 0x0204);
+    PASS();
+}
+
+static void test_mask_write_validation(void)
+{
+    uint8_t tx[MODBUS_RTU_FRAME_MAX];
+    uint16_t tx_len = 0;
+    uint8_t pdu_short[6] = {MODBUS_FC_MASK_WRITE_REGISTER, 0x00, 0x04,
+                            0x00, 0xF2, 0x00};
+    uint8_t adu[16];
+    uint16_t adu_len;
+    TEST("FC 0x16: bad address -> exc 02; short PDU -> exc 03");
+    modbus_rtu_init(1);
+
+    /* Address outside the register map -> Illegal Data Address */
+    ASSERT_EQ(mask_write_request(1, MODBUS_MAX_REGISTERS, 0xFFFF, 0x0000,
+                                 tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(tx_len, 5);
+    ASSERT_EQ(tx[1], (uint8_t)(MODBUS_FC_MASK_WRITE_REGISTER | 0x80U));
+    ASSERT_EQ(tx[2], MODBUS_EXC_ILLEGAL_DATA_ADDRESS);
+
+    /* Truncated request (6 instead of 7 bytes) -> Illegal Data Value */
+    adu_len = rtu_build_adu(1, pdu_short, 6, adu);
+    ASSERT_EQ(modbus_rtu_process(adu, adu_len, tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(tx[1], (uint8_t)(MODBUS_FC_MASK_WRITE_REGISTER | 0x80U));
+    ASSERT_EQ(tx[2], MODBUS_EXC_ILLEGAL_DATA_VALUE);
+    PASS();
+}
+
+static void test_mask_write_broadcast_executes(void)
+{
+    uint8_t tx[MODBUS_RTU_FRAME_MAX];
+    uint16_t tx_len = 0;
+    TEST("broadcast FC 0x16 executes silently and counts as success");
+    modbus_rtu_init(1);
+    modbus_write_holding_register(4, 0x0012);
+
+    ASSERT_EQ(mask_write_request(0, 4, 0x00F2, 0x0025, tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(tx_len, 0);
+    ASSERT_EQ(modbus_read_holding_register(4), 0x0017);
+    ASSERT_EQ(event_request(1, MODBUS_FC_GET_COMM_EVENT_COUNTER, tx, &tx_len),
+              MODBUS_OK);
+    ASSERT_EQ((tx[4] << 8) | tx[5], 1);
+    PASS();
+}
+
+static void test_mask_write_tcp_accepted(void)
+{
+    /* MBAP len = unit(1) + PDU(7) = 8; PDU = 16 00 04 00 F2 00 25 */
+    uint8_t rx16[14] = {0x00, 0x01, 0x00, 0x00, 0x00, 0x08, 0x01,
+                        0x16, 0x00, 0x04, 0x00, 0xF2, 0x00, 0x25};
+    uint8_t tx[MODBUS_TCP_MAX_ADU];
+    uint16_t tx_len = 0;
+    TEST("TCP accepts FC 0x16 (shared dispatcher), echo response");
+    modbus_rtu_init(1);
+    modbus_tcp_init(1);
+    modbus_write_holding_register(4, 0x0012);
+
+    ASSERT_EQ(modbus_tcp_build_response(rx16, sizeof(rx16), tx, &tx_len),
+              MODBUS_OK);
+    ASSERT_EQ(tx_len, 14); /* MBAP(7) + echo PDU(7) */
+    ASSERT_EQ(tx[7], MODBUS_FC_MASK_WRITE_REGISTER);
+    ASSERT_EQ(tx[10], 0x00);
+    ASSERT_EQ(tx[11], 0xF2);
+    ASSERT_EQ(modbus_read_holding_register(4), 0x0017);
+    PASS();
+}
+
+/* ============================================================
+ * FC 0x18 Read FIFO Queue — slave (§6.18, RTU + TCP)
+ * ============================================================ */
+
+/* Send one FC 0x18 request through the real slave. */
+static modbus_status_t fifo_request(uint8_t slave, uint16_t fifo_addr,
+                                    uint8_t *tx, uint16_t *tx_len)
+{
+    uint8_t pdu[3] = {
+        MODBUS_FC_READ_FIFO_QUEUE,
+        (uint8_t)(fifo_addr >> 8), (uint8_t)(fifo_addr & 0xFFU)
+    };
+    uint8_t adu[8];
+    uint16_t adu_len = rtu_build_adu(slave, pdu, 3, adu);
+    return modbus_rtu_process(adu, adu_len, tx, tx_len);
+}
+
+static void test_fifo_empty_queue(void)
+{
+    uint8_t tx[MODBUS_RTU_FRAME_MAX];
+    uint16_t tx_len = 0;
+    TEST("FC 0x18 empty queue: normal response, FIFO count 0");
+    modbus_rtu_init(1);
+
+    ASSERT_EQ(fifo_request(1, 0, tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(tx_len, 8); /* addr + 5-byte PDU + CRC */
+    ASSERT_EQ(tx[1], MODBUS_FC_READ_FIFO_QUEUE);
+    ASSERT_EQ(tx[2], 0x00);
+    ASSERT_EQ(tx[3], 0x02); /* byte count = 2 (count field only) */
+    ASSERT_EQ(tx[4], 0x00);
+    ASSERT_EQ(tx[5], 0x00); /* FIFO count 0 */
+    PASS();
+}
+
+static void test_fifo_read_oldest_first_no_drain(void)
+{
+    uint8_t tx[MODBUS_RTU_FRAME_MAX];
+    uint16_t tx_len = 0;
+    TEST("FC 0x18 returns values oldest-first and does NOT drain (§6.18)");
+    modbus_rtu_init(1);
+    ASSERT_EQ(modbus_fifo_push(0, 0x01B8), 1U);
+    ASSERT_EQ(modbus_fifo_push(0, 0x1284), 1U);
+    ASSERT_EQ(modbus_fifo_push(0, 0x0003), 1U);
+
+    ASSERT_EQ(fifo_request(1, 0, tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(tx[2], 0x00);
+    ASSERT_EQ(tx[3], 0x08); /* byte count = 2 + 2*3 */
+    ASSERT_EQ((tx[4] << 8) | tx[5], 3);
+    ASSERT_EQ((tx[6] << 8) | tx[7], 0x01B8);
+    ASSERT_EQ((tx[8] << 8) | tx[9], 0x1284);
+    ASSERT_EQ((tx[10] << 8) | tx[11], 0x0003);
+
+    /* Second read: same contents — the read must not clear the queue */
+    ASSERT_EQ(fifo_request(1, 0, tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ((tx[4] << 8) | tx[5], 3);
+    ASSERT_EQ((tx[6] << 8) | tx[7], 0x01B8);
+    PASS();
+}
+
+static void test_fifo_undefined_pointer(void)
+{
+    uint8_t tx[MODBUS_RTU_FRAME_MAX];
+    uint16_t tx_len = 0;
+    TEST("FC 0x18 undefined FIFO pointer -> exception 02");
+    modbus_rtu_init(1);
+
+    ASSERT_EQ(fifo_request(1, MODBUS_FIFO_COUNT, tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(tx_len, 5);
+    ASSERT_EQ(tx[1], (uint8_t)(MODBUS_FC_READ_FIFO_QUEUE | 0x80U));
+    ASSERT_EQ(tx[2], MODBUS_EXC_ILLEGAL_DATA_ADDRESS);
+    PASS();
+}
+
+static void test_fifo_full_at_spec_max(void)
+{
+    uint8_t tx[MODBUS_RTU_FRAME_MAX];
+    uint16_t tx_len = 0;
+    TEST("FC 0x18 queue holds spec max 31 registers; push 32 rejected");
+    modbus_rtu_init(1);
+
+    for (uint16_t i = 0; i < 31U; i++) {
+        ASSERT_EQ(modbus_fifo_push(1, (uint16_t)(0x1000U + i)), 1U);
+    }
+    ASSERT_EQ(modbus_fifo_push(1, 0xFFFF), 0U); /* full */
+
+    ASSERT_EQ(fifo_request(1, 1, tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(tx_len, 70); /* addr + PDU(5 + 62) + CRC */
+    ASSERT_EQ((tx[2] << 8) | tx[3], 64); /* byte count = 2 + 62 */
+    ASSERT_EQ((tx[4] << 8) | tx[5], 31);
+    ASSERT_EQ((tx[6] << 8) | tx[7], 0x1000);
+    /* Undefined queue address is rejected by the push API too */
+    ASSERT_EQ(modbus_fifo_push(MODBUS_FIFO_COUNT, 0x1234), 0U);
+    PASS();
+}
+
+static void test_fifo_broadcast_dropped(void)
+{
+    uint8_t tx[MODBUS_RTU_FRAME_MAX];
+    uint16_t tx_len = 0;
+    TEST("broadcast FC 0x18 (read FC) dropped, not executed, not counted");
+    modbus_rtu_init(1);
+    ASSERT_EQ(modbus_fifo_push(0, 0x00AA), 1U);
+
+    ASSERT_EQ(fifo_request(0, 0, tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(tx_len, 0);
+    ASSERT_EQ(event_request(1, MODBUS_FC_GET_COMM_EVENT_COUNTER, tx, &tx_len),
+              MODBUS_OK);
+    ASSERT_EQ((tx[4] << 8) | tx[5], 0);
+    PASS();
+}
+
+static void test_fifo_tcp_accepted(void)
+{
+    /* MBAP len = unit(1) + PDU(3) = 4; PDU = 18 00 00 */
+    uint8_t rx18[10] = {0x00, 0x01, 0x00, 0x00, 0x00, 0x04, 0x01,
+                        0x18, 0x00, 0x00};
+    uint8_t tx[MODBUS_TCP_MAX_ADU];
+    uint16_t tx_len = 0;
+    TEST("TCP accepts FC 0x18 (shared dispatcher)");
+    modbus_rtu_init(1);
+    modbus_tcp_init(1);
+    ASSERT_EQ(modbus_fifo_push(0, 0x0055), 1U);
+
+    ASSERT_EQ(modbus_tcp_build_response(rx18, sizeof(rx18), tx, &tx_len),
+              MODBUS_OK);
+    ASSERT_EQ(tx_len, 14); /* MBAP(7) + PDU(5 + 2) */
+    ASSERT_EQ(tx[7], MODBUS_FC_READ_FIFO_QUEUE);
+    ASSERT_EQ((tx[10] << 8) | tx[11], 1); /* FIFO count */
+    PASS();
+}
+
+static void test_event_counter_covers_new_fcs(void)
+{
+    uint8_t tx[MODBUS_RTU_FRAME_MAX];
+    uint16_t tx_len = 0;
+    TEST("comm event counter: 0x11 + 0x16 + 0x18 successes all count");
+    modbus_rtu_init(1);
+
+    ASSERT_EQ(server_id_request(1, tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(mask_write_request(1, 4, 0xFFFF, 0x0000, tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(fifo_request(1, 0, tx, &tx_len), MODBUS_OK);
+
+    ASSERT_EQ(event_request(1, MODBUS_FC_GET_COMM_EVENT_COUNTER, tx, &tx_len),
+              MODBUS_OK);
+    ASSERT_EQ((tx[4] << 8) | tx[5], 3);
+    PASS();
+}
+
+static void test_fc_new_codes_supported(void)
+{
+    TEST("FC 0x11 / 0x16 / 0x18 in the supported-FC list; 0x12/0x13 not");
+    ASSERT_TRUE(modbus_fc_supported(MODBUS_FC_REPORT_SERVER_ID));
+    ASSERT_TRUE(modbus_fc_supported(MODBUS_FC_MASK_WRITE_REGISTER));
+    ASSERT_TRUE(modbus_fc_supported(MODBUS_FC_READ_FIFO_QUEUE));
+    ASSERT_FALSE(modbus_fc_supported(0x12));
+    ASSERT_FALSE(modbus_fc_supported(0x13));
+    PASS();
+}
+
+/* ============================================================
+ * FC 0x11 / 0x16 / 0x18 — master build/parse + loopback
+ * ============================================================ */
+
+static void test_master_build_parse_server_id(void)
+{
+    uint8_t pdu[4];
+    uint8_t resp[8] = {MODBUS_FC_REPORT_SERVER_ID, 4, 'A', 'B', 'C', 0xFF};
+    uint8_t id[8];
+    uint8_t id_len = 0;
+    uint8_t run = 0;
+    TEST("master build/parse FC 0x11 report server ID round-trip");
+    ASSERT_EQ(modbus_master_build_report_server_id(pdu, sizeof(pdu)), 1);
+    ASSERT_EQ(pdu[0], MODBUS_FC_REPORT_SERVER_ID);
+
+    ASSERT_EQ(modbus_master_parse_report_server_id(resp, 6, id, sizeof(id),
+                                                   &id_len, &run), MODBUS_OK);
+    ASSERT_EQ(id_len, 3);
+    ASSERT_EQ(id[0], 'A');
+    ASSERT_EQ(id[1], 'B');
+    ASSERT_EQ(id[2], 'C');
+    ASSERT_EQ(run, 0xFF);
+
+    /* Wrong FC, truncated PDU, inconsistent byte count: all rejected */
+    resp[0] = 0x12;
+    ASSERT_EQ(modbus_master_parse_report_server_id(resp, 6, id, sizeof(id),
+                                                   &id_len, &run), MODBUS_ERROR);
+    resp[0] = MODBUS_FC_REPORT_SERVER_ID;
+    ASSERT_EQ(modbus_master_parse_report_server_id(resp, 5, id, sizeof(id),
+                                                   &id_len, &run), MODBUS_ERROR);
+    ASSERT_EQ(modbus_master_parse_report_server_id(resp, 6, id, 2,
+                                                   &id_len, &run), MODBUS_ERROR);
+    PASS();
+}
+
+static void test_master_build_parse_mask_write(void)
+{
+    uint8_t pdu[7];
+    uint8_t bad[7];
+    TEST("master build/parse FC 0x16 mask write register round-trip");
+    ASSERT_EQ(modbus_master_build_mask_write_register(0x0004, 0x00F2, 0x0025,
+                                                      pdu, sizeof(pdu)), 7);
+    ASSERT_EQ(pdu[0], MODBUS_FC_MASK_WRITE_REGISTER);
+    ASSERT_EQ(pdu[1], 0x00);
+    ASSERT_EQ(pdu[2], 0x04);
+    ASSERT_EQ(pdu[3], 0x00);
+    ASSERT_EQ(pdu[4], 0xF2);
+    ASSERT_EQ(pdu[5], 0x00);
+    ASSERT_EQ(pdu[6], 0x25);
+
+    /* Echo parse: identical response accepted, any flip rejected */
+    ASSERT_EQ(modbus_master_parse_echo(pdu, 7, pdu, 7), MODBUS_OK);
+    for (uint16_t i = 0; i < 7U; i++) {
+        bad[i] = pdu[i];
+    }
+    bad[4] ^= 0x01U;
+    ASSERT_EQ(modbus_master_parse_echo(bad, 7, pdu, 7), MODBUS_ERROR);
+    ASSERT_EQ(modbus_master_parse_echo(pdu, 5, pdu, 7), MODBUS_ERROR);
+    ASSERT_EQ(modbus_master_parse_echo(NULL, 7, pdu, 7), MODBUS_ERROR);
+    PASS();
+}
+
+static void test_master_build_parse_fifo(void)
+{
+    uint8_t pdu[3];
+    uint8_t resp[13] = {MODBUS_FC_READ_FIFO_QUEUE, 0x00, 0x06, 0x00, 0x02,
+                        0x01, 0xB8, 0x12, 0x84, 0, 0, 0, 0};
+    uint8_t empty[5] = {MODBUS_FC_READ_FIFO_QUEUE, 0x00, 0x02, 0x00, 0x00};
+    uint8_t over[5]  = {MODBUS_FC_READ_FIFO_QUEUE, 0x00, 0x42, 0x00, 0x20};
+    uint16_t regs[4];
+    uint8_t count = 0;
+    TEST("master build/parse FC 0x18 read FIFO queue round-trip");
+    ASSERT_EQ(modbus_master_build_read_fifo_queue(0x04DE, pdu, sizeof(pdu)), 3);
+    ASSERT_EQ(pdu[0], MODBUS_FC_READ_FIFO_QUEUE);
+    ASSERT_EQ(pdu[1], 0x04);
+    ASSERT_EQ(pdu[2], 0xDE);
+
+    ASSERT_EQ(modbus_master_parse_read_fifo_queue(resp, 9, regs, 4, &count),
+              MODBUS_OK);
+    ASSERT_EQ(count, 2);
+    ASSERT_EQ(regs[0], 0x01B8);
+    ASSERT_EQ(regs[1], 0x1284);
+
+    /* Empty queue response: normal, count 0 */
+    ASSERT_EQ(modbus_master_parse_read_fifo_queue(empty, 5, regs, 4, &count),
+              MODBUS_OK);
+    ASSERT_EQ(count, 0);
+
+    /* FIFO count > 31 must be rejected (spec limit) */
+    ASSERT_EQ(modbus_master_parse_read_fifo_queue(over, 5, regs, 4, &count),
+              MODBUS_ERROR);
+    /* Byte count / PDU length inconsistency rejected */
+    ASSERT_EQ(modbus_master_parse_read_fifo_queue(resp, 8, regs, 4, &count),
+              MODBUS_ERROR);
+    PASS();
+}
+
+static void test_master_server_id_loopback(void)
+{
+    static const char expect_id[] = MODBUS_SERVER_ID;
+    uint8_t id[64];
+    uint8_t id_len = 0;
+    uint8_t run = 0;
+    uint8_t exc = 0;
+    TEST("master FC 0x11 over loopback transport (real slave)");
+    modbus_rtu_init(1);
+    modbus_master_init(&mock_transport);
+
+    ASSERT_EQ(modbus_master_report_server_id(1, id, sizeof(id), &id_len,
+                                             &run, &exc), MODBUS_OK);
+    ASSERT_EQ(id_len, (uint8_t)(sizeof(expect_id) - 1U));
+    ASSERT_TRUE(memcmp(id, expect_id, id_len) == 0);
+    ASSERT_EQ(run, 0xFF);
+
+    /* Broadcast is rejected before any bus traffic */
+    ASSERT_EQ(modbus_master_report_server_id(0, id, sizeof(id), &id_len,
+                                             &run, &exc), MODBUS_ERROR);
+    PASS();
+}
+
+static void test_master_mask_write_loopback(void)
+{
+    uint8_t exc = 0;
+    TEST("master FC 0x16 over loopback: echo checked, register updated");
+    modbus_rtu_init(1);
+    modbus_master_init(&mock_transport);
+    modbus_write_holding_register(4, 0x0012);
+
+    ASSERT_EQ(modbus_master_mask_write_register(1, 4, 0x00F2, 0x0025, &exc),
+              MODBUS_OK);
+    ASSERT_EQ(modbus_read_holding_register(4), 0x0017);
+
+    /* Broadcast: executes on the slave, MODBUS_OK without a response */
+    ASSERT_EQ(modbus_master_mask_write_register(0, 4, 0x0000, 0xABCD, &exc),
+              MODBUS_OK);
+    ASSERT_EQ(modbus_read_holding_register(4), 0xABCD);
+
+    /* Bad address surfaces as MODBUS_EXCEPTION 02 */
+    ASSERT_EQ(modbus_master_mask_write_register(1, MODBUS_MAX_REGISTERS,
+                                                0xFFFF, 0x0000, &exc),
+              MODBUS_EXCEPTION);
+    ASSERT_EQ(exc, MODBUS_EXC_ILLEGAL_DATA_ADDRESS);
+    PASS();
+}
+
+static void test_master_fifo_loopback(void)
+{
+    uint16_t regs[8];
+    uint8_t count = 0;
+    uint8_t exc = 0;
+    TEST("master FC 0x18 over loopback: values, exceptions, broadcast guard");
+    modbus_rtu_init(1);
+    modbus_master_init(&mock_transport);
+    ASSERT_EQ(modbus_fifo_push(0, 0x00AA), 1U);
+    ASSERT_EQ(modbus_fifo_push(0, 0x00BB), 1U);
+
+    ASSERT_EQ(modbus_master_read_fifo_queue(1, 0, regs, 8, &count, &exc),
+              MODBUS_OK);
+    ASSERT_EQ(count, 2);
+    ASSERT_EQ(regs[0], 0x00AA);
+    ASSERT_EQ(regs[1], 0x00BB);
+
+    /* Read again: the slave must not have drained the queue */
+    ASSERT_EQ(modbus_master_read_fifo_queue(1, 0, regs, 8, &count, &exc),
+              MODBUS_OK);
+    ASSERT_EQ(count, 2);
+
+    /* Undefined FIFO pointer surfaces as MODBUS_EXCEPTION 02 */
+    ASSERT_EQ(modbus_master_read_fifo_queue(1, MODBUS_FIFO_COUNT, regs, 8,
+                                            &count, &exc), MODBUS_EXCEPTION);
+    ASSERT_EQ(exc, MODBUS_EXC_ILLEGAL_DATA_ADDRESS);
+
+    /* Broadcast is rejected before any bus traffic */
+    ASSERT_EQ(modbus_master_read_fifo_queue(0, 0, regs, 8, &count, &exc),
+              MODBUS_ERROR);
+    PASS();
+}
+
+/* ============================================================
  * Modbus TCP must reject FC 0x08 (serial-line only)
  * ============================================================ */
 
@@ -1415,6 +1982,38 @@ int main(void)
     test_master_build_parse_event_log();
     test_master_event_loopback();
     test_tcp_rejects_fc0b_fc0c();
+
+    printf("\n[FC 0x11 Report Server ID — slave]\n");
+    test_server_id_response_layout();
+    test_server_id_counts_as_success();
+    test_server_id_broadcast_ignored();
+    test_server_id_rejects_extra_data();
+    test_tcp_rejects_fc11();
+    test_fc_new_codes_supported();
+
+    printf("\n[FC 0x16 Mask Write Register — slave]\n");
+    test_mask_write_spec_example();
+    test_mask_write_edge_masks();
+    test_mask_write_validation();
+    test_mask_write_broadcast_executes();
+    test_mask_write_tcp_accepted();
+
+    printf("\n[FC 0x18 Read FIFO Queue — slave]\n");
+    test_fifo_empty_queue();
+    test_fifo_read_oldest_first_no_drain();
+    test_fifo_undefined_pointer();
+    test_fifo_full_at_spec_max();
+    test_fifo_broadcast_dropped();
+    test_fifo_tcp_accepted();
+    test_event_counter_covers_new_fcs();
+
+    printf("\n[FC 0x11/0x16/0x18 — master build/parse + loopback]\n");
+    test_master_build_parse_server_id();
+    test_master_build_parse_mask_write();
+    test_master_build_parse_fifo();
+    test_master_server_id_loopback();
+    test_master_mask_write_loopback();
+    test_master_fifo_loopback();
 
     printf("\n[Modbus Master PDU Tests]\n");
     test_master_build_read_holding();

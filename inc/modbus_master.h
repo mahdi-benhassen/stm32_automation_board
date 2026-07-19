@@ -14,7 +14,8 @@ extern "C" {
  * Builds request PDUs, runs a half-duplex RTU transaction via a transport
  * hook, and parses responses. Supports the same function codes as the slave:
  * 0x01–0x06, 0x07, 0x08 (diagnostics, serial only), 0x0B, 0x0C (comm event
- * counter/log, serial only), 0x0F, 0x10, 0x14, 0x15, 0x17, 0x2B/0x0E.
+ * counter/log, serial only), 0x0F, 0x10, 0x11 (report server ID, serial
+ * only), 0x14, 0x15, 0x16, 0x17, 0x18, 0x2B/0x0E.
  *
  * Transport is injected so unit tests can mock the bus and FreeRTOS can
  * share RS485 with the slave path (mutex + master RX queue).
@@ -115,6 +116,18 @@ uint16_t modbus_master_build_read_exception_status(uint8_t *pdu, uint16_t pdu_ma
 /** FC 0x0B / 0x0C — empty requests (FC only, serial line only) */
 uint16_t modbus_master_build_get_comm_event_counter(uint8_t *pdu, uint16_t pdu_max);
 uint16_t modbus_master_build_get_comm_event_log(uint8_t *pdu, uint16_t pdu_max);
+
+/** FC 0x11 — empty request (FC only, serial line only) */
+uint16_t modbus_master_build_report_server_id(uint8_t *pdu, uint16_t pdu_max);
+
+/** FC 0x16 — 7-byte PDU: FC + address + AND mask + OR mask */
+uint16_t modbus_master_build_mask_write_register(uint16_t addr, uint16_t and_mask,
+                                                 uint16_t or_mask, uint8_t *pdu,
+                                                 uint16_t pdu_max);
+
+/** FC 0x18 — 3-byte PDU: FC + FIFO pointer address */
+uint16_t modbus_master_build_read_fifo_queue(uint16_t fifo_addr, uint8_t *pdu,
+                                             uint16_t pdu_max);
 
 /**
  * FC 0x08 Diagnostics (serial line only) — generic builder.
@@ -290,6 +303,41 @@ modbus_status_t modbus_master_get_comm_event_log(uint8_t slave,
                                                  uint8_t *events_len_out,
                                                  uint8_t *exception_code);
 
+/* ---- FC 0x11 / 0x16 / 0x18 ---- */
+
+/**
+ * FC 0x11 Report Server ID (serial line only; not broadcast-executable —
+ * slave 0 is rejected before any bus traffic).
+ * id_out receives the device-specific ID bytes (up to id_max; *id_len_out
+ * the actual length — MODBUS_ERROR if the response carries more than
+ * id_max), *run_status_out the run indicator (0x00 = OFF, 0xFF = ON).
+ */
+modbus_status_t modbus_master_report_server_id(uint8_t slave, uint8_t *id_out,
+                                               uint8_t id_max, uint8_t *id_len_out,
+                                               uint8_t *run_status_out,
+                                               uint8_t *exception_code);
+
+/**
+ * FC 0x16 Mask Write Register — Result = (cur & and_mask) | (or_mask &
+ * ~and_mask). Broadcast-eligible: with slave 0 the write executes on all
+ * slaves and MODBUS_OK is returned without waiting for a response.
+ * Unicast responses are validated as an exact echo of the request.
+ */
+modbus_status_t modbus_master_mask_write_register(uint8_t slave, uint16_t addr,
+                                                  uint16_t and_mask,
+                                                  uint16_t or_mask,
+                                                  uint8_t *exception_code);
+
+/**
+ * FC 0x18 Read FIFO Queue (not broadcast-executable — slave 0 is rejected
+ * before any bus traffic). regs_out holds up to regs_max registers
+ * (oldest first); *count_out receives the actual FIFO count (0..31).
+ */
+modbus_status_t modbus_master_read_fifo_queue(uint8_t slave, uint16_t fifo_addr,
+                                              uint16_t *regs_out, uint8_t regs_max,
+                                              uint8_t *count_out,
+                                              uint8_t *exception_code);
+
 /**
  * FC 0x14 — single sub-request; regs_out holds record_length registers.
  */
@@ -371,6 +419,38 @@ modbus_status_t modbus_master_parse_read_file_record(const uint8_t *pdu, uint16_
 /** Parse FC 0x2B/0x0E into devid structure. */
 modbus_status_t modbus_master_parse_device_id(const uint8_t *pdu, uint16_t pdu_len,
                                               modbus_master_devid_t *out);
+
+/**
+ * Generic echo validator: the response PDU must be byte-identical to the
+ * request PDU. Covers the normal responses of FC 0x05, 0x06, 0x0F, 0x10,
+ * 0x15 and 0x16 (all "echo of the request" per spec).
+ */
+modbus_status_t modbus_master_parse_echo(const uint8_t *pdu, uint16_t pdu_len,
+                                         const uint8_t *req_pdu,
+                                         uint16_t req_pdu_len);
+
+/**
+ * Parse FC 0x11: FC + byte count + server ID + run indicator.
+ * id_out (may be NULL together with id_len_out to read only the run
+ * indicator) must hold at least as many ID bytes as the response carries.
+ */
+modbus_status_t modbus_master_parse_report_server_id(const uint8_t *pdu,
+                                                     uint16_t pdu_len,
+                                                     uint8_t *id_out,
+                                                     uint8_t id_max,
+                                                     uint8_t *id_len_out,
+                                                     uint8_t *run_status_out);
+
+/**
+ * Parse FC 0x18: FC + byte count(2) + FIFO count(2) + FIFO registers.
+ * regs_out (oldest first) must hold at least as many registers as the
+ * response carries; *count_out receives the FIFO count.
+ */
+modbus_status_t modbus_master_parse_read_fifo_queue(const uint8_t *pdu,
+                                                    uint16_t pdu_len,
+                                                    uint16_t *regs_out,
+                                                    uint8_t regs_max,
+                                                    uint8_t *count_out);
 
 #ifdef __cplusplus
 }
