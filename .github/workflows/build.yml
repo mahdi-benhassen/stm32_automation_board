@@ -97,11 +97,28 @@ jobs:
             build/stm32_automation_board.map
           retention-days: 30
 
+  native-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build and run native Modbus protocol tests
+        run: |
+          gcc -Wall -Wextra -Itests -Iinc -o test_modbus \
+            tests/test_modbus.c tests/modbus_crc_standalone.c \
+            tests/modbus_host_stubs.c \
+            src/modbus.c src/modbus_diag.c src/modbus_master.c src/modbus_tcp.c
+          ./test_modbus
+
   lint:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Check GPIO pin conflicts
+        run: python3 scripts/check_pin_conflicts.py
 
       - name: Run cppcheck
         run: |
@@ -113,7 +130,7 @@ jobs:
             -I inc src/
 
   release:
-    needs: build
+    needs: [build, native-tests]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:

@@ -11,6 +11,7 @@
 #include "analog_io.h"
 #include "relay.h"
 #include "rs485.h"
+#include "rs232.h"
 #include "ethernet.h"
 #include "modbus.h"
 #include "modbus_master.h"

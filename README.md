@@ -10,10 +10,11 @@ Industrial automation controller based on STM32F407 with Ethernet, RS485, and Mo
 - **2 Analog Outputs** (12-bit DAC, 0-10V range)
 - **4 Relays** with individual LED status indicators
 - **RS485** half-duplex interface with DE/RE direction control
+- **RS232** full-duplex interface (USART1, PA9/PA10) — Modbus RTU slave
 - **Ethernet** 10/100M RMII with built-in MAC (external PHY: LAN8720/DP83848)
-- **Modbus RTU** dual-role over RS485: **slave** (default) + **master** API (shares the bus)
+- **Modbus RTU** dual-role over RS485: **slave** (default) + **master** API (shares the bus); slave also served on RS232
 - **Modbus TCP** (server) over Ethernet, port 502
-- **Extended Modbus FCs**: 0x07, 0x14, 0x15, 0x17, 0x2B/0x0E (slave + master)
+- **Extended Modbus FCs**: 0x07, 0x08 (diagnostics, serial only), 0x14, 0x15, 0x17, 0x2B/0x0E (slave + master)
 
 ## Modbus RTU Master API
 
@@ -33,7 +34,7 @@ modbus_master_devid_t id;
 st = modbus_master_read_device_identification(2, MODBUS_DEVID_BASIC, 0, &id, &exc);
 ```
 
-Supported master function codes: **0x01–0x07, 0x0F, 0x10, 0x14, 0x15, 0x17, 0x2B/0x0E**.
+Supported master function codes: **0x01–0x08, 0x0F, 0x10, 0x14, 0x15, 0x17, 0x2B/0x0E**. FC 0x08 (Diagnostics) is serial-line only (RTU); Modbus TCP rejects it with exception 01 as specified.
 
 ## Modbus Register Map
 
@@ -85,7 +86,7 @@ Tags starting with `v` trigger a release with firmware artifacts.
 | DI4    | PE4  | DO4    | PB8  |
 | DI5    | PE5  | DO5    | PB9  |
 | DI6    | PE6  | DO6    | PB10 |
-| DI7    | PE7  | DO7    | PB12 |
+| DI7    | PE7  | DO7    | PB7  |
 
 ### Analog I/O
 | Signal | Pin     | ADC Channel  |
@@ -111,6 +112,8 @@ Tags starting with `v` trigger a release with firmware artifacts.
 | RS485 TX | PD5  | USART2_TX       |
 | RS485 RX | PD6  | USART2_RX       |
 | RS485 DE | PD7  | Direction ctrl  |
+| RS232 TX | PA9  | USART1_TX       |
+| RS232 RX | PA10 | USART1_RX       |
 
 ### Ethernet (RMII)
 | Signal      | Pin  |
