@@ -13,7 +13,8 @@ extern "C" {
  *
  * Builds request PDUs, runs a half-duplex RTU transaction via a transport
  * hook, and parses responses. Supports the same function codes as the slave:
- * 0x01–0x06, 0x07, 0x0F, 0x10, 0x14, 0x15, 0x17, 0x2B/0x0E.
+ * 0x01–0x06, 0x07, 0x08 (diagnostics, serial only), 0x0F, 0x10, 0x14, 0x15,
+ * 0x17, 0x2B/0x0E.
  *
  * Transport is injected so unit tests can mock the bus and FreeRTOS can
  * share RS485 with the slave path (mutex + master RX queue).
@@ -110,6 +111,14 @@ uint16_t modbus_master_build_write_multiple_registers(uint16_t start, uint16_t q
 
 /** FC 0x07 — empty request (FC only) */
 uint16_t modbus_master_build_read_exception_status(uint8_t *pdu, uint16_t pdu_max);
+
+/**
+ * FC 0x08 Diagnostics (serial line only) — generic builder.
+ * PDU is always FC + sub-function (2) + data (2). See modbus_diag.h for
+ * the MODBUS_DIAG_SUB_* sub-function codes.
+ */
+uint16_t modbus_master_build_diagnostics(uint16_t sub_function, uint16_t data,
+                                         uint8_t *pdu, uint16_t pdu_max);
 
 /**
  * FC 0x14 — single sub-request (ref type 0x06).
@@ -214,6 +223,43 @@ modbus_status_t modbus_master_write_multiple_registers(uint8_t slave, uint16_t s
 modbus_status_t modbus_master_read_exception_status(uint8_t slave, uint8_t *status,
                                                     uint8_t *exception_code);
 
+/* ---- FC 0x08 Diagnostics convenience APIs (serial line only) ---- */
+
+/**
+ * Sub 0x00 Return Query Data — *echo_out must equal the sent data.
+ */
+modbus_status_t modbus_master_diag_query_data(uint8_t slave, uint16_t data,
+                                              uint16_t *echo_out,
+                                              uint8_t *exception_code);
+
+/**
+ * Sub 0x01 Restart Communications Option — clears the slave's comm event
+ * counters; clear_event_log != 0 sends data 0xFF00 (also clears the comm
+ * event log on slaves that keep one). Broadcast-eligible (slave 0).
+ * Note: a slave in listen-only mode exits it silently (no response) —
+ * unicast callers then see a timeout.
+ */
+modbus_status_t modbus_master_diag_restart_comm(uint8_t slave,
+                                                uint8_t clear_event_log,
+                                                uint8_t *exception_code);
+
+/**
+ * Sub 0x0A Clear Counters and Diagnostic Register. Broadcast-eligible:
+ * with slave 0 the counters are cleared on all slaves and MODBUS_OK is
+ * returned without waiting for a response.
+ */
+modbus_status_t modbus_master_diag_clear_counters(uint8_t slave,
+                                                  uint8_t *exception_code);
+
+/**
+ * Sub 0x0B–0x12 Return counter — *value_out receives the counter value.
+ * sub_function must be one of MODBUS_DIAG_SUB_*_COUNT (0x0B..0x12).
+ */
+modbus_status_t modbus_master_diag_read_counter(uint8_t slave,
+                                                uint16_t sub_function,
+                                                uint16_t *value_out,
+                                                uint8_t *exception_code);
+
 /**
  * FC 0x14 — single sub-request; regs_out holds record_length registers.
  */
@@ -261,6 +307,14 @@ modbus_status_t modbus_master_parse_read_registers(const uint8_t *pdu, uint16_t 
 /** Parse FC 0x07. */
 modbus_status_t modbus_master_parse_exception_status(const uint8_t *pdu, uint16_t pdu_len,
                                                      uint8_t *status);
+
+/**
+ * Parse an FC 0x08 Diagnostics response: must be a 5-byte echo of FC +
+ * sub-function; *data_out (may be NULL) receives the 2-byte data field.
+ */
+modbus_status_t modbus_master_parse_diagnostics(const uint8_t *pdu, uint16_t pdu_len,
+                                                uint16_t sub_function,
+                                                uint16_t *data_out);
 
 /** Parse FC 0x14 single-sub-request response into regs_out[record_length]. */
 modbus_status_t modbus_master_parse_read_file_record(const uint8_t *pdu, uint16_t pdu_len,

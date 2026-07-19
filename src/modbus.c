@@ -1,4 +1,5 @@
 #include "modbus.h"
+#include "modbus_diag.h"
 #include "digital_io.h"
 #include "analog_io.h"
 #include "relay.h"
@@ -96,6 +97,7 @@ void modbus_rtu_init(uint8_t slave_id)
 {
     modbus_slave_id = slave_id;
     modbus_crc_init_tables();
+    modbus_diag_reset();
     for (uint16_t i = 0; i < MODBUS_MAX_REGISTERS; i++) {
         holding_regs[i] = 0;
         input_regs[i]  = 0;
@@ -776,12 +778,17 @@ modbus_status_t modbus_rtu_process(uint8_t *rx_buf, uint16_t rx_len,
 
     uint16_t rx_crc = ((uint16_t)rx_buf[rx_len - 1] << 8) | rx_buf[rx_len - 2];
     uint16_t calc_crc = modbus_crc16(rx_buf, rx_len - 2);
-    if (rx_crc != calc_crc) return MODBUS_CRC_ERROR;
+    if (rx_crc != calc_crc) {
+        modbus_diag_note_comm_error();
+        return MODBUS_CRC_ERROR;
+    }
+    modbus_diag_note_bus_message();
 
     uint8_t slave_addr = rx_buf[0];
     if (slave_addr != modbus_slave_id && slave_addr != 0) {
         return MODBUS_OK;
     }
+    modbus_diag_note_slave_message();
 
     uint8_t is_broadcast = (slave_addr == 0);
 
@@ -791,10 +798,25 @@ modbus_status_t modbus_rtu_process(uint8_t *rx_buf, uint16_t rx_len,
     uint8_t tx_pdu[MODBUS_RTU_FRAME_MAX];
     uint16_t tx_pdu_len = 0;
 
-    modbus_status_t status = modbus_pdu_process(rx_pdu, rx_pdu_len,
-                                                 tx_pdu, &tx_pdu_len,
-                                                 is_broadcast);
-    if (status != MODBUS_OK) return status;
+    /*
+     * FC 0x08 Diagnostics is serial-line only: intercept it here, before
+     * the shared PDU dispatcher. Modbus TCP needs no change — its
+     * modbus_pdu_process() default: path rejects 0x08 as Illegal Function.
+     */
+    if (rx_pdu_len >= 1U && rx_pdu[0] == MODBUS_FC_DIAGNOSTICS) {
+        tx_pdu_len = modbus_diag_process(rx_pdu, rx_pdu_len, tx_pdu, is_broadcast);
+    } else if (modbus_diag_listen_only()) {
+        /* Listen-only: messages are monitored, but no action is taken and
+         * no response is sent (V1.1b3 §6.8 sub 0x04). */
+        tx_pdu_len = 0;
+    } else {
+        modbus_status_t status = modbus_pdu_process(rx_pdu, rx_pdu_len,
+                                                     tx_pdu, &tx_pdu_len,
+                                                     is_broadcast);
+        if (status != MODBUS_OK) return status;
+    }
+    modbus_diag_note_result(tx_pdu_len > 0U,
+                            tx_pdu_len > 0U && (tx_pdu[0] & 0x80U));
 
     if (tx_pdu_len == 0) {
         *tx_len = 0;

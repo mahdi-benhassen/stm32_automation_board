@@ -1,4 +1,5 @@
 #include "modbus_master.h"
+#include "modbus_diag.h"
 
 #include <string.h>
 
@@ -127,6 +128,18 @@ uint16_t modbus_master_build_read_exception_status(uint8_t *pdu, uint16_t pdu_ma
     }
     pdu[0] = MODBUS_FC_READ_EXCEPTION_STATUS;
     return 1U;
+}
+
+uint16_t modbus_master_build_diagnostics(uint16_t sub_function, uint16_t data,
+                                         uint8_t *pdu, uint16_t pdu_max)
+{
+    if (!pdu || pdu_max < 5U) {
+        return 0U;
+    }
+    pdu[0] = MODBUS_FC_DIAGNOSTICS;
+    (void)put_u16_be(&pdu[1], sub_function);
+    (void)put_u16_be(&pdu[3], data);
+    return 5U;
 }
 
 uint16_t modbus_master_build_read_file_record(uint16_t file_number,
@@ -465,6 +478,25 @@ modbus_status_t modbus_master_parse_exception_status(const uint8_t *pdu, uint16_
     return MODBUS_OK;
 }
 
+modbus_status_t modbus_master_parse_diagnostics(const uint8_t *pdu, uint16_t pdu_len,
+                                                uint16_t sub_function,
+                                                uint16_t *data_out)
+{
+    uint16_t resp_sub;
+
+    if (!pdu || pdu_len != 5U || pdu[0] != MODBUS_FC_DIAGNOSTICS) {
+        return MODBUS_ERROR;
+    }
+    resp_sub = ((uint16_t)pdu[1] << 8) | pdu[2];
+    if (resp_sub != sub_function) {
+        return MODBUS_ERROR;
+    }
+    if (data_out) {
+        *data_out = ((uint16_t)pdu[3] << 8) | pdu[4];
+    }
+    return MODBUS_OK;
+}
+
 modbus_status_t modbus_master_parse_read_file_record(const uint8_t *pdu, uint16_t pdu_len,
                                                      uint16_t record_length,
                                                      uint16_t *regs_out)
@@ -777,6 +809,122 @@ modbus_status_t modbus_master_read_exception_status(uint8_t slave, uint8_t *stat
         return st;
     }
     return modbus_master_parse_exception_status(resp, resp_len, status);
+}
+
+/* ============================================================
+ * FC 0x08 Diagnostics (serial line only)
+ * ============================================================ */
+
+modbus_status_t modbus_master_diag_query_data(uint8_t slave, uint16_t data,
+                                              uint16_t *echo_out,
+                                              uint8_t *exception_code)
+{
+    uint8_t req[5];
+    uint8_t resp[MODBUS_RTU_FRAME_MAX];
+    uint16_t resp_len = 0U;
+    uint16_t req_len;
+    modbus_status_t st;
+
+    if (!echo_out) {
+        return MODBUS_ERROR;
+    }
+    req_len = modbus_master_build_diagnostics(MODBUS_DIAG_SUB_RETURN_QUERY_DATA,
+                                              data, req, sizeof(req));
+    if (req_len == 0U) {
+        return MODBUS_ERROR;
+    }
+    st = master_xact_and_check_echo_addr(slave, req, req_len, resp, &resp_len,
+                                         sizeof(resp), exception_code);
+    if (st != MODBUS_OK) {
+        return st;
+    }
+    return modbus_master_parse_diagnostics(resp, resp_len,
+                                           MODBUS_DIAG_SUB_RETURN_QUERY_DATA,
+                                           echo_out);
+}
+
+modbus_status_t modbus_master_diag_restart_comm(uint8_t slave,
+                                                uint8_t clear_event_log,
+                                                uint8_t *exception_code)
+{
+    uint8_t req[5];
+    uint8_t resp[MODBUS_RTU_FRAME_MAX];
+    uint16_t resp_len = 0U;
+    uint16_t req_len;
+    modbus_status_t st;
+
+    req_len = modbus_master_build_diagnostics(MODBUS_DIAG_SUB_RESTART_COMM,
+                                              clear_event_log ? 0xFF00U : 0x0000U,
+                                              req, sizeof(req));
+    if (req_len == 0U) {
+        return MODBUS_ERROR;
+    }
+    st = master_xact_and_check_echo_addr(slave, req, req_len, resp, &resp_len,
+                                         sizeof(resp), exception_code);
+    if (st != MODBUS_OK) {
+        return st;
+    }
+    if (slave == 0U) {
+        return MODBUS_OK; /* broadcast: acted on, no response */
+    }
+    return modbus_master_parse_diagnostics(resp, resp_len,
+                                           MODBUS_DIAG_SUB_RESTART_COMM, NULL);
+}
+
+modbus_status_t modbus_master_diag_clear_counters(uint8_t slave,
+                                                  uint8_t *exception_code)
+{
+    uint8_t req[5];
+    uint8_t resp[MODBUS_RTU_FRAME_MAX];
+    uint16_t resp_len = 0U;
+    uint16_t req_len;
+    modbus_status_t st;
+
+    req_len = modbus_master_build_diagnostics(MODBUS_DIAG_SUB_CLEAR_COUNTERS,
+                                              0x0000U, req, sizeof(req));
+    if (req_len == 0U) {
+        return MODBUS_ERROR;
+    }
+    st = master_xact_and_check_echo_addr(slave, req, req_len, resp, &resp_len,
+                                         sizeof(resp), exception_code);
+    if (st != MODBUS_OK) {
+        return st;
+    }
+    if (slave == 0U) {
+        return MODBUS_OK; /* broadcast: counters cleared, no response */
+    }
+    return modbus_master_parse_diagnostics(resp, resp_len,
+                                           MODBUS_DIAG_SUB_CLEAR_COUNTERS, NULL);
+}
+
+modbus_status_t modbus_master_diag_read_counter(uint8_t slave,
+                                                uint16_t sub_function,
+                                                uint16_t *value_out,
+                                                uint8_t *exception_code)
+{
+    uint8_t req[5];
+    uint8_t resp[MODBUS_RTU_FRAME_MAX];
+    uint16_t resp_len = 0U;
+    uint16_t req_len;
+    modbus_status_t st;
+
+    if (!value_out ||
+        sub_function < MODBUS_DIAG_SUB_BUS_MESSAGE_COUNT ||
+        sub_function > MODBUS_DIAG_SUB_BUS_CHAR_OVERRUN_COUNT) {
+        return MODBUS_ERROR;
+    }
+    req_len = modbus_master_build_diagnostics(sub_function, 0x0000U,
+                                              req, sizeof(req));
+    if (req_len == 0U) {
+        return MODBUS_ERROR;
+    }
+    st = master_xact_and_check_echo_addr(slave, req, req_len, resp, &resp_len,
+                                         sizeof(resp), exception_code);
+    if (st != MODBUS_OK) {
+        return st;
+    }
+    return modbus_master_parse_diagnostics(resp, resp_len, sub_function,
+                                           value_out);
 }
 
 modbus_status_t modbus_master_read_file_record(uint8_t slave, uint16_t file_number,

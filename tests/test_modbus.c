@@ -1,52 +1,16 @@
 /*
  * Unit tests for Modbus protocol logic.
  * Runs natively on GitHub Actions (no hardware required).
- * Compile: gcc -o test_modbus tests/test_modbus.c tests/modbus_crc_standalone.c -Itests
+ * Compiles the REAL protocol core with host gcc (proof it is HAL-free):
+ *   gcc -Wall -Wextra -Itests -Iinc -o test_modbus \
+ *       tests/test_modbus.c tests/modbus_crc_standalone.c \
+ *       tests/modbus_host_stubs.c \
+ *       src/modbus.c src/modbus_diag.c src/modbus_master.c src/modbus_tcp.c
  */
 #include "modbus_test_config.h"
 #include <stdio.h>
 #include <string.h>
 #include <assert.h>
-
-extern uint16_t modbus_crc16(const uint8_t *buf, uint16_t len);
-extern int modbus_validate_quantity(uint8_t fc, uint16_t quantity);
-extern int modbus_validate_single_coil_value(uint16_t value);
-extern uint16_t modbus_response_size(uint8_t fc, uint16_t quantity);
-extern int modbus_response_fits(uint8_t fc, uint16_t quantity, uint16_t buf_size);
-extern void modbus_rtu_timeouts_us(uint32_t baudrate, uint32_t *t15_us, uint32_t *t35_us);
-extern int modbus_fc_supported(uint8_t fc);
-extern int modbus_mei_supported(uint8_t mei_type);
-extern int modbus_file_number_valid(uint16_t file_number);
-/* Master builders / parsers (standalone mirror of src/modbus_master.c) */
-extern uint16_t modbus_master_build_read(uint8_t fc, uint16_t start, uint16_t quantity,
-                                         uint8_t *pdu, uint16_t pdu_max);
-extern uint16_t modbus_master_build_read_exception_status(uint8_t *pdu, uint16_t pdu_max);
-extern uint16_t modbus_master_build_read_file_record(uint16_t file_number,
-                                                     uint16_t record_number,
-                                                     uint16_t record_length,
-                                                     uint8_t *pdu, uint16_t pdu_max);
-extern uint16_t modbus_master_build_write_file_record(uint16_t file_number,
-                                                      uint16_t record_number,
-                                                      uint16_t record_length,
-                                                      const uint16_t *regs,
-                                                      uint8_t *pdu, uint16_t pdu_max);
-extern uint16_t modbus_master_build_read_write_multiple_registers(
-    uint16_t read_start, uint16_t read_qty,
-    uint16_t write_start, uint16_t write_qty,
-    const uint16_t *write_regs,
-    uint8_t *pdu, uint16_t pdu_max);
-extern uint16_t modbus_master_build_read_device_id(uint8_t read_device_id, uint8_t object_id,
-                                                   uint8_t *pdu, uint16_t pdu_max);
-extern uint16_t modbus_master_rtu_frame(uint8_t slave_id, const uint8_t *pdu, uint16_t pdu_len,
-                                        uint8_t *adu, uint16_t adu_max);
-extern int modbus_master_parse_exception_status(const uint8_t *pdu, uint16_t pdu_len,
-                                                uint8_t *status);
-extern int modbus_master_parse_read_registers(const uint8_t *pdu, uint16_t pdu_len,
-                                              uint16_t quantity, uint16_t *regs_out);
-extern int modbus_master_parse_read_file_record(const uint8_t *pdu, uint16_t pdu_len,
-                                                uint16_t record_length, uint16_t *regs_out);
-extern int modbus_master_parse_device_id_header(const uint8_t *pdu, uint16_t pdu_len,
-                                                uint8_t *conformity, uint8_t *obj_count);
 
 static int tests_run = 0;
 static int tests_pass = 0;
@@ -373,10 +337,11 @@ static void test_fc_device_id_mei_supported(void)
     PASS();
 }
 
-static void test_fc_unknown_not_supported(void)
+static void test_fc_diagnostics_supported(void)
 {
-    TEST("unknown FC 0x08 Diagnostics is not claimed as supported");
-    ASSERT_FALSE(modbus_fc_supported(0x08));
+    TEST("FC 0x08 Diagnostics is supported (serial only), unknown FC 0x09 is not");
+    ASSERT_TRUE(modbus_fc_supported(MODBUS_FC_DIAGNOSTICS));
+    ASSERT_FALSE(modbus_fc_supported(0x09));
     PASS();
 }
 
@@ -514,7 +479,7 @@ static void test_master_parse_fc07(void)
     uint8_t pdu[2] = {0x07, 0xA5};
     uint8_t status = 0;
     TEST("master parse FC 0x07 exception status");
-    ASSERT_TRUE(modbus_master_parse_exception_status(pdu, 2, &status));
+    ASSERT_EQ(modbus_master_parse_exception_status(pdu, 2, &status), MODBUS_OK);
     ASSERT_EQ(status, 0xA5);
     PASS();
 }
@@ -524,7 +489,7 @@ static void test_master_parse_regs(void)
     uint8_t pdu[6] = {0x03, 0x04, 0x12, 0x34, 0x56, 0x78};
     uint16_t regs[2] = {0};
     TEST("master parse read registers response");
-    ASSERT_TRUE(modbus_master_parse_read_registers(pdu, 6, 2, regs));
+    ASSERT_EQ(modbus_master_parse_read_registers(pdu, 6, 2, regs), MODBUS_OK);
     ASSERT_EQ(regs[0], 0x1234);
     ASSERT_EQ(regs[1], 0x5678);
     PASS();
@@ -536,7 +501,7 @@ static void test_master_parse_fc14(void)
     uint8_t pdu[8] = {0x14, 0x06, 0x05, 0x06, 0x11, 0x22, 0x33, 0x44};
     uint16_t regs[2] = {0};
     TEST("master parse FC 0x14 read file record response");
-    ASSERT_TRUE(modbus_master_parse_read_file_record(pdu, 8, 2, regs));
+    ASSERT_EQ(modbus_master_parse_read_file_record(pdu, 8, 2, regs), MODBUS_OK);
     ASSERT_EQ(regs[0], 0x1122);
     ASSERT_EQ(regs[1], 0x3344);
     PASS();
@@ -544,12 +509,452 @@ static void test_master_parse_fc14(void)
 
 static void test_master_parse_fc2b_header(void)
 {
-    uint8_t pdu[7] = {0x2B, 0x0E, 0x01, 0x81, 0x00, 0x00, 0x03};
-    uint8_t conf = 0, nobj = 0;
+    uint8_t pdu[12] = {0x2B, 0x0E, 0x01, 0x81, 0x00, 0x00, 0x01,
+                       0x00, 0x03, 'x', 'A', 'I'};
+    modbus_master_devid_t out;
     TEST("master parse FC 0x2B device id header");
-    ASSERT_TRUE(modbus_master_parse_device_id_header(pdu, 7, &conf, &nobj));
-    ASSERT_EQ(conf, 0x81);
-    ASSERT_EQ(nobj, 3);
+    ASSERT_EQ(modbus_master_parse_device_id(pdu, sizeof(pdu), &out), MODBUS_OK);
+    ASSERT_EQ(out.conformity_level, 0x81);
+    ASSERT_EQ(out.object_count, 1);
+    ASSERT_EQ(out.objects[0].object_id, 0x00);
+    PASS();
+}
+
+/* ============================================================
+ * FC 0x08 Diagnostics — slave dispatcher (issue #6)
+ * Tests drive the REAL modbus_rtu_process() interception path.
+ * ============================================================ */
+
+/* Build an RTU ADU ([slave][pdu][CRC lo][CRC hi]); returns ADU length. */
+static uint16_t rtu_build_adu(uint8_t slave, const uint8_t *pdu, uint16_t pdu_len,
+                              uint8_t *adu)
+{
+    uint16_t crc;
+    adu[0] = slave;
+    for (uint16_t i = 0; i < pdu_len; i++) {
+        adu[1U + i] = pdu[i];
+    }
+    crc = modbus_crc16(adu, (uint16_t)(1U + pdu_len));
+    adu[1U + pdu_len]     = (uint8_t)(crc & 0xFFU);
+    adu[2U + pdu_len]     = (uint8_t)(crc >> 8);
+    return (uint16_t)(pdu_len + 3U);
+}
+
+/* Send one FC 0x08 request through the real slave; returns status. */
+static modbus_status_t diag_request(uint8_t slave, uint16_t sub, uint16_t data,
+                                    uint8_t *tx, uint16_t *tx_len)
+{
+    uint8_t pdu[5] = {
+        MODBUS_FC_DIAGNOSTICS,
+        (uint8_t)(sub >> 8), (uint8_t)(sub & 0xFFU),
+        (uint8_t)(data >> 8), (uint8_t)(data & 0xFFU)
+    };
+    uint8_t adu[8];
+    uint16_t adu_len = rtu_build_adu(slave, pdu, 5, adu);
+    return modbus_rtu_process(adu, adu_len, tx, tx_len);
+}
+
+static void test_diag_echo_query_data(void)
+{
+    uint8_t tx[MODBUS_RTU_FRAME_MAX];
+    uint16_t tx_len = 0;
+    uint16_t crc;
+    TEST("diag sub 0x00 return query data echoes request");
+    modbus_rtu_init(1);
+    ASSERT_EQ(diag_request(1, MODBUS_DIAG_SUB_RETURN_QUERY_DATA, 0x1234,
+                           tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(tx_len, 8);
+    ASSERT_EQ(tx[0], 1);
+    ASSERT_EQ(tx[1], 0x08);
+    ASSERT_EQ(tx[2], 0x00);
+    ASSERT_EQ(tx[3], 0x00);
+    ASSERT_EQ(tx[4], 0x12);
+    ASSERT_EQ(tx[5], 0x34);
+    crc = modbus_crc16(tx, 6);
+    ASSERT_EQ(tx[6], (uint8_t)(crc & 0xFFU));
+    ASSERT_EQ(tx[7], (uint8_t)(crc >> 8));
+    PASS();
+}
+
+static void test_diag_restart_comm_clears_counters(void)
+{
+    uint8_t tx[MODBUS_RTU_FRAME_MAX];
+    uint16_t tx_len = 0;
+    TEST("diag sub 0x01 restart comm echoes and clears counters");
+    modbus_rtu_init(1);
+    /* generate one bus/slave message first */
+    ASSERT_EQ(diag_request(1, MODBUS_DIAG_SUB_RETURN_QUERY_DATA, 0xAAAA,
+                           tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(modbus_diag_counter_read(MODBUS_DIAG_SUB_BUS_MESSAGE_COUNT), 1);
+    ASSERT_EQ(diag_request(1, MODBUS_DIAG_SUB_RESTART_COMM, 0x0000,
+                           tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(tx_len, 8); /* not listen-only: normal echo response */
+    ASSERT_EQ(tx[1], 0x08);
+    ASSERT_EQ(tx[2], 0x00);
+    ASSERT_EQ(tx[3], 0x01);
+    /* restart cleared the counters (its own pre-count included) */
+    ASSERT_EQ(modbus_diag_counter_read(MODBUS_DIAG_SUB_BUS_MESSAGE_COUNT), 0);
+    ASSERT_EQ(modbus_diag_counter_read(MODBUS_DIAG_SUB_SLAVE_MESSAGE_COUNT), 0);
+    PASS();
+}
+
+static void test_diag_read_diagnostic_register(void)
+{
+    uint8_t tx[MODBUS_RTU_FRAME_MAX];
+    uint16_t tx_len = 0;
+    TEST("diag sub 0x02 diagnostic register returns static 0x0000");
+    modbus_rtu_init(1);
+    ASSERT_EQ(diag_request(1, MODBUS_DIAG_SUB_READ_DIAG_REGISTER, 0x0000,
+                           tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(tx_len, 8);
+    ASSERT_EQ(tx[4], 0x00);
+    ASSERT_EQ(tx[5], 0x00);
+    PASS();
+}
+
+static void test_diag_listen_only_cycle(void)
+{
+    uint8_t tx[MODBUS_RTU_FRAME_MAX];
+    uint16_t tx_len = 0;
+    uint8_t pdu03[5] = {MODBUS_FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01};
+    uint8_t adu[16];
+    uint16_t adu_len;
+    TEST("listen-only suppresses all responses; restart comm escapes silently");
+    modbus_rtu_init(1);
+
+    /* Enter listen-only: no response, ever */
+    ASSERT_EQ(diag_request(1, MODBUS_DIAG_SUB_FORCE_LISTEN_ONLY, 0x0000,
+                           tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(tx_len, 0);
+    ASSERT_TRUE(modbus_diag_listen_only());
+
+    /* Normal requests are monitored but not answered */
+    adu_len = rtu_build_adu(1, pdu03, 5, adu);
+    ASSERT_EQ(modbus_rtu_process(adu, adu_len, tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(tx_len, 0);
+
+    /* Diagnostic requests other than restart are also silent */
+    ASSERT_EQ(diag_request(1, MODBUS_DIAG_SUB_RETURN_QUERY_DATA, 0x1111,
+                           tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(tx_len, 0);
+
+    /* ... but slave_message_count still increments for suppressed frames
+     * (force-listen-only + FC 0x03 + echo = 3) */
+    ASSERT_EQ(modbus_diag_counter_read(MODBUS_DIAG_SUB_SLAVE_MESSAGE_COUNT), 3);
+
+    /* Restart-Comm is the only escape and is itself silent */
+    ASSERT_EQ(diag_request(1, MODBUS_DIAG_SUB_RESTART_COMM, 0x0000,
+                           tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(tx_len, 0);
+    ASSERT_FALSE(modbus_diag_listen_only());
+    /* restart also cleared the counters */
+    ASSERT_EQ(modbus_diag_counter_read(MODBUS_DIAG_SUB_SLAVE_MESSAGE_COUNT), 0);
+
+    /* Back online: echo works again */
+    ASSERT_EQ(diag_request(1, MODBUS_DIAG_SUB_RETURN_QUERY_DATA, 0x2222,
+                           tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(tx_len, 8);
+    PASS();
+}
+
+static void test_diag_clear_counters_unicast(void)
+{
+    uint8_t tx[MODBUS_RTU_FRAME_MAX];
+    uint16_t tx_len = 0;
+    TEST("diag sub 0x0A clear counters (unicast) echoes and clears");
+    modbus_rtu_init(1);
+    ASSERT_EQ(diag_request(1, MODBUS_DIAG_SUB_RETURN_QUERY_DATA, 0xAAAA,
+                           tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(modbus_diag_counter_read(MODBUS_DIAG_SUB_BUS_MESSAGE_COUNT), 1);
+    ASSERT_EQ(diag_request(1, MODBUS_DIAG_SUB_CLEAR_COUNTERS, 0x0000,
+                           tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(tx_len, 8);
+    ASSERT_EQ(tx[2], 0x00);
+    ASSERT_EQ(tx[3], 0x0A);
+    ASSERT_EQ(modbus_diag_counter_read(MODBUS_DIAG_SUB_BUS_MESSAGE_COUNT), 0);
+    PASS();
+}
+
+static void test_diag_broadcast_clear_counters_no_response(void)
+{
+    uint8_t tx[MODBUS_RTU_FRAME_MAX];
+    uint16_t tx_len = 0;
+    TEST("diag sub 0x0A broadcast clears counters without responding");
+    modbus_rtu_init(1);
+    ASSERT_EQ(diag_request(1, MODBUS_DIAG_SUB_RETURN_QUERY_DATA, 0xAAAA,
+                           tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(modbus_diag_counter_read(MODBUS_DIAG_SUB_BUS_MESSAGE_COUNT), 1);
+    /* Broadcast (slave 0): counters cleared, NO response frame */
+    ASSERT_EQ(diag_request(0, MODBUS_DIAG_SUB_CLEAR_COUNTERS, 0x0000,
+                           tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(tx_len, 0);
+    ASSERT_EQ(modbus_diag_counter_read(MODBUS_DIAG_SUB_BUS_MESSAGE_COUNT), 0);
+    ASSERT_EQ(modbus_diag_counter_read(MODBUS_DIAG_SUB_SLAVE_MESSAGE_COUNT), 0);
+    PASS();
+}
+
+static void test_diag_broadcast_non_eligible_ignored(void)
+{
+    uint8_t tx[MODBUS_RTU_FRAME_MAX];
+    uint16_t tx_len = 0;
+    TEST("diag broadcast of non-eligible sub-function (echo) is ignored");
+    modbus_rtu_init(1);
+    ASSERT_EQ(diag_request(0, MODBUS_DIAG_SUB_RETURN_QUERY_DATA, 0x1234,
+                           tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(tx_len, 0);
+    PASS();
+}
+
+static void test_diag_counter_reads(void)
+{
+    uint8_t tx[MODBUS_RTU_FRAME_MAX];
+    uint16_t tx_len = 0;
+    uint8_t pdu_bad[1] = {0x42}; /* unknown FC -> exception 01 */
+    uint8_t pdu03[5] = {MODBUS_FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01};
+    uint8_t adu[16];
+    uint16_t adu_len;
+    TEST("diag sub 0x0B-0x12 counter reads track RTU traffic");
+    modbus_rtu_init(1);
+
+    /* 1 normal echo (bus=1, slave=1) */
+    ASSERT_EQ(diag_request(1, MODBUS_DIAG_SUB_RETURN_QUERY_DATA, 0xAAAA,
+                           tx, &tx_len), MODBUS_OK);
+    /* 1 frame for another slave (bus=2, not a slave message) */
+    adu_len = rtu_build_adu(5, pdu03, 5, adu);
+    ASSERT_EQ(modbus_rtu_process(adu, adu_len, tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(tx_len, 0);
+    /* 1 bad-CRC frame (comm error, no bus message) */
+    adu_len = rtu_build_adu(1, pdu03, 5, adu);
+    adu[adu_len - 1] ^= 0xFFU;
+    ASSERT_EQ(modbus_rtu_process(adu, adu_len, tx, &tx_len), MODBUS_CRC_ERROR);
+    /* 1 exception response (bus=3, slave=2, exception=1) */
+    adu_len = rtu_build_adu(1, pdu_bad, 1, adu);
+    ASSERT_EQ(modbus_rtu_process(adu, adu_len, tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(tx[1], 0xC2);
+    ASSERT_EQ(tx[2], MODBUS_EXC_ILLEGAL_FUNCTION);
+
+    /* Read the counters back through the wire (each read adds its own
+     * bus + slave message before the value is sampled). */
+    ASSERT_EQ(diag_request(1, MODBUS_DIAG_SUB_BUS_MESSAGE_COUNT, 0,
+                           tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ((tx[4] << 8) | tx[5], 4);   /* echo + other-slave + bad-fc + this */
+    ASSERT_EQ(diag_request(1, MODBUS_DIAG_SUB_BUS_COMM_ERROR_COUNT, 0,
+                           tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ((tx[4] << 8) | tx[5], 1);   /* the bad-CRC frame */
+    ASSERT_EQ(diag_request(1, MODBUS_DIAG_SUB_SLAVE_EXCEPTION_COUNT, 0,
+                           tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ((tx[4] << 8) | tx[5], 1);   /* FC 0x42 exception */
+    ASSERT_EQ(diag_request(1, MODBUS_DIAG_SUB_SLAVE_MESSAGE_COUNT, 0,
+                           tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ((tx[4] << 8) | tx[5], 6);   /* echo, bad-fc, 4 counter reads so far */
+    ASSERT_EQ(diag_request(1, MODBUS_DIAG_SUB_SLAVE_NO_RESPONSE_COUNT, 0,
+                           tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ((tx[4] << 8) | tx[5], 0);
+    ASSERT_EQ(diag_request(1, MODBUS_DIAG_SUB_SLAVE_NAK_COUNT, 0,
+                           tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ((tx[4] << 8) | tx[5], 0);   /* hard-wired: no NAK path */
+    ASSERT_EQ(diag_request(1, MODBUS_DIAG_SUB_SLAVE_BUSY_COUNT, 0,
+                           tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ((tx[4] << 8) | tx[5], 0);   /* hard-wired: no Busy path */
+    ASSERT_EQ(diag_request(1, MODBUS_DIAG_SUB_BUS_CHAR_OVERRUN_COUNT, 0,
+                           tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ((tx[4] << 8) | tx[5], 0);   /* no UART on host */
+    PASS();
+}
+
+static void test_diag_illegal_sub_function(void)
+{
+    uint8_t tx[MODBUS_RTU_FRAME_MAX];
+    uint16_t tx_len = 0;
+    TEST("diag unknown sub-function 0x0020 -> exception 01");
+    modbus_rtu_init(1);
+    ASSERT_EQ(diag_request(1, 0x0020, 0x0000, tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(tx_len, 5);
+    ASSERT_EQ(tx[1], 0x88);
+    ASSERT_EQ(tx[2], MODBUS_EXC_ILLEGAL_FUNCTION);
+    PASS();
+}
+
+static void test_diag_illegal_data_value(void)
+{
+    uint8_t tx[MODBUS_RTU_FRAME_MAX];
+    uint16_t tx_len = 0;
+    TEST("diag bad data field -> exception 03");
+    modbus_rtu_init(1);
+    /* Restart-Comm only accepts 0x0000 / 0xFF00 */
+    ASSERT_EQ(diag_request(1, MODBUS_DIAG_SUB_RESTART_COMM, 0x1234,
+                           tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(tx[1], 0x88);
+    ASSERT_EQ(tx[2], MODBUS_EXC_ILLEGAL_DATA_VALUE);
+    /* Diagnostic-register read requires data 0x0000 */
+    ASSERT_EQ(diag_request(1, MODBUS_DIAG_SUB_READ_DIAG_REGISTER, 0x0001,
+                           tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(tx[1], 0x88);
+    ASSERT_EQ(tx[2], MODBUS_EXC_ILLEGAL_DATA_VALUE);
+    PASS();
+}
+
+static void test_diag_comm_error_hook_on_bad_crc(void)
+{
+    uint8_t tx[MODBUS_RTU_FRAME_MAX];
+    uint16_t tx_len = 0;
+    uint8_t pdu03[5] = {MODBUS_FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01};
+    uint8_t adu[16];
+    uint16_t adu_len;
+    TEST("bad CRC frame bumps comm-error counter, not bus-message counter");
+    modbus_rtu_init(1);
+    adu_len = rtu_build_adu(1, pdu03, 5, adu);
+    adu[adu_len - 2] ^= 0xFFU;
+    ASSERT_EQ(modbus_rtu_process(adu, adu_len, tx, &tx_len), MODBUS_CRC_ERROR);
+    ASSERT_EQ(modbus_diag_counter_read(MODBUS_DIAG_SUB_BUS_COMM_ERROR_COUNT), 1);
+    ASSERT_EQ(modbus_diag_counter_read(MODBUS_DIAG_SUB_BUS_MESSAGE_COUNT), 0);
+    PASS();
+}
+
+/* ============================================================
+ * FC 0x08 Diagnostics — master side (loopback through real slave)
+ * ============================================================ */
+
+static uint8_t  mock_resp[MODBUS_RTU_FRAME_MAX];
+static uint16_t mock_resp_len;
+
+static modbus_status_t mock_send(const uint8_t *adu, uint16_t adu_len, void *ctx)
+{
+    uint8_t rx[MODBUS_RTU_FRAME_MAX];
+    (void)ctx;
+    for (uint16_t i = 0; i < adu_len; i++) {
+        rx[i] = adu[i];
+    }
+    /* Run the request through the REAL slave stack */
+    (void)modbus_rtu_process(rx, adu_len, mock_resp, &mock_resp_len);
+    return MODBUS_OK;
+}
+
+static modbus_status_t mock_recv(uint8_t *adu, uint16_t max_len, uint16_t *adu_len,
+                                 uint32_t timeout_ms, void *ctx)
+{
+    (void)timeout_ms;
+    (void)ctx;
+    if (mock_resp_len == 0U || mock_resp_len > max_len) {
+        return MODBUS_TIMEOUT;
+    }
+    for (uint16_t i = 0; i < mock_resp_len; i++) {
+        adu[i] = mock_resp[i];
+    }
+    *adu_len = mock_resp_len;
+    return MODBUS_OK;
+}
+
+static void mock_delay_t35(void *ctx) { (void)ctx; }
+static void mock_flush_rx(void *ctx)  { (void)ctx; mock_resp_len = 0U; }
+
+static const modbus_master_transport_t mock_transport = {
+    mock_send, mock_recv, mock_delay_t35, mock_flush_rx, NULL, NULL
+};
+
+static void test_master_build_parse_diag(void)
+{
+    uint8_t pdu[8];
+    uint16_t data = 0;
+    TEST("master build/parse FC 0x08 diagnostics round-trip");
+    ASSERT_EQ(modbus_master_build_diagnostics(MODBUS_DIAG_SUB_RETURN_QUERY_DATA,
+                                              0x1234, pdu, sizeof(pdu)), 5);
+    ASSERT_EQ(pdu[0], 0x08);
+    ASSERT_EQ(pdu[1], 0x00);
+    ASSERT_EQ(pdu[2], 0x00);
+    ASSERT_EQ(pdu[3], 0x12);
+    ASSERT_EQ(pdu[4], 0x34);
+    ASSERT_EQ(modbus_master_parse_diagnostics(pdu, 5,
+                                              MODBUS_DIAG_SUB_RETURN_QUERY_DATA,
+                                              &data), MODBUS_OK);
+    ASSERT_EQ(data, 0x1234);
+    /* wrong sub-function echo must be rejected */
+    ASSERT_EQ(modbus_master_parse_diagnostics(pdu, 5,
+                                              MODBUS_DIAG_SUB_CLEAR_COUNTERS,
+                                              &data), MODBUS_ERROR);
+    PASS();
+}
+
+static void test_master_diag_loopback_transactions(void)
+{
+    uint16_t value = 0;
+    uint8_t exc = 0;
+    TEST("master diag convenience APIs over loopback transport (real slave)");
+    modbus_rtu_init(1);
+    modbus_master_init(&mock_transport);
+
+    /* Return Query Data: echo must come back intact */
+    ASSERT_EQ(modbus_master_diag_query_data(1, 0xBEEF, &value, &exc), MODBUS_OK);
+    ASSERT_EQ(value, 0xBEEF);
+
+    /* Bus message count: query above was 1, this read is the 2nd */
+    ASSERT_EQ(modbus_master_diag_read_counter(1, MODBUS_DIAG_SUB_BUS_MESSAGE_COUNT,
+                                              &value, &exc), MODBUS_OK);
+    ASSERT_EQ(value, 2);
+
+    /* Restart-Comm (unicast, keep event log) */
+    ASSERT_EQ(modbus_master_diag_restart_comm(1, 0, &exc), MODBUS_OK);
+    ASSERT_EQ(modbus_diag_counter_read(MODBUS_DIAG_SUB_BUS_MESSAGE_COUNT), 0);
+
+    /* Clear counters (unicast) */
+    ASSERT_EQ(modbus_master_diag_query_data(1, 0x0102, &value, &exc), MODBUS_OK);
+    ASSERT_EQ(modbus_master_diag_clear_counters(1, &exc), MODBUS_OK);
+    ASSERT_EQ(modbus_diag_counter_read(MODBUS_DIAG_SUB_BUS_MESSAGE_COUNT), 0);
+
+    /* Broadcast clear counters: no response, still MODBUS_OK */
+    ASSERT_EQ(modbus_master_diag_query_data(1, 0x0304, &value, &exc), MODBUS_OK);
+    ASSERT_EQ(modbus_master_diag_clear_counters(0, &exc), MODBUS_OK);
+    ASSERT_EQ(modbus_diag_counter_read(MODBUS_DIAG_SUB_BUS_MESSAGE_COUNT), 0);
+
+    /* Invalid counter sub-function is rejected before any bus traffic */
+    ASSERT_EQ(modbus_master_diag_read_counter(1, 0x0013, &value, &exc),
+              MODBUS_ERROR);
+    PASS();
+}
+
+static void test_master_diag_exception_round_trip(void)
+{
+    uint8_t req[5];
+    uint8_t resp[MODBUS_RTU_FRAME_MAX];
+    uint16_t resp_len = 0;
+    uint8_t exc = 0;
+    TEST("master diag illegal sub-function returns MODBUS_EXCEPTION 01");
+    modbus_rtu_init(1);
+    modbus_master_init(&mock_transport);
+    ASSERT_EQ(modbus_master_build_diagnostics(0x0020, 0x0000, req, sizeof(req)), 5);
+    ASSERT_EQ(modbus_master_transaction(1, req, 5, resp, &resp_len, sizeof(resp),
+                                        &exc, 100U), MODBUS_EXCEPTION);
+    ASSERT_EQ(exc, MODBUS_EXC_ILLEGAL_FUNCTION);
+    PASS();
+}
+
+/* ============================================================
+ * Modbus TCP must reject FC 0x08 (serial-line only)
+ * ============================================================ */
+
+static void test_tcp_rejects_fc08(void)
+{
+    /* MBAP: tid=1, pid=0, len=6 (unit + 5 PDU), unit=1; PDU = 08 00 00 12 34 */
+    uint8_t rx[12] = {0x00, 0x01, 0x00, 0x00, 0x00, 0x06,
+                      0x01, 0x08, 0x00, 0x00, 0x12, 0x34};
+    uint8_t rx03[12] = {0x00, 0x02, 0x00, 0x00, 0x00, 0x06,
+                        0x01, 0x03, 0x00, 0x00, 0x00, 0x01};
+    uint8_t tx[MODBUS_TCP_MAX_ADU];
+    uint16_t tx_len = 0;
+    TEST("TCP rejects FC 0x08 with exception 01, still serves FC 0x03");
+    modbus_rtu_init(1);
+    modbus_tcp_init(1);
+
+    ASSERT_EQ(modbus_tcp_build_response(rx, sizeof(rx), tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(tx_len, 9); /* MBAP(7) + exception PDU(2) */
+    ASSERT_EQ(tx[5], 3);  /* MBAP length = unit + 2 */
+    ASSERT_EQ(tx[7], 0x88);
+    ASSERT_EQ(tx[8], MODBUS_EXC_ILLEGAL_FUNCTION);
+
+    /* Same MBAP envelope with FC 0x03: read 1 holding register -> normal */
+    tx_len = 0;
+    ASSERT_EQ(modbus_tcp_build_response(rx03, sizeof(rx03), tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(tx[7], MODBUS_FC_READ_HOLDING_REGISTERS);
     PASS();
 }
 
@@ -604,9 +1009,28 @@ int main(void)
     test_fc_file_record_supported();
     test_fc_read_write_multiple_supported();
     test_fc_device_id_mei_supported();
-    test_fc_unknown_not_supported();
+    test_fc_diagnostics_supported();
     test_file_number_valid_range();
     test_fc17_write_qty_limit();
+
+    printf("\n[FC 0x08 Diagnostics — slave (issue #6)]\n");
+    test_diag_echo_query_data();
+    test_diag_restart_comm_clears_counters();
+    test_diag_read_diagnostic_register();
+    test_diag_listen_only_cycle();
+    test_diag_clear_counters_unicast();
+    test_diag_broadcast_clear_counters_no_response();
+    test_diag_broadcast_non_eligible_ignored();
+    test_diag_counter_reads();
+    test_diag_illegal_sub_function();
+    test_diag_illegal_data_value();
+    test_diag_comm_error_hook_on_bad_crc();
+
+    printf("\n[FC 0x08 Diagnostics — master + TCP isolation]\n");
+    test_master_build_parse_diag();
+    test_master_diag_loopback_transactions();
+    test_master_diag_exception_round_trip();
+    test_tcp_rejects_fc08();
 
     printf("\n[Modbus Master PDU Tests]\n");
     test_master_build_read_holding();

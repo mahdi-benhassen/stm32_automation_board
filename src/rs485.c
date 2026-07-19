@@ -1,5 +1,6 @@
 #include "rs485.h"
 #include "modbus.h"
+#include "modbus_diag.h"
 
 /*
  * Modbus RTU framing over RS485
@@ -399,6 +400,7 @@ void USART2_IRQHandler(void)
 
     /* Clear overrun if any so RX keeps working */
     if (__HAL_UART_GET_FLAG(&huart_rs485, UART_FLAG_ORE)) {
+        modbus_diag_note_char_overrun();
         volatile uint32_t tmp = huart_rs485.Instance->SR;
         tmp = huart_rs485.Instance->DR;
         (void)tmp;
