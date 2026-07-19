@@ -13,8 +13,8 @@ extern "C" {
  *
  * Builds request PDUs, runs a half-duplex RTU transaction via a transport
  * hook, and parses responses. Supports the same function codes as the slave:
- * 0x01–0x06, 0x07, 0x08 (diagnostics, serial only), 0x0F, 0x10, 0x14, 0x15,
- * 0x17, 0x2B/0x0E.
+ * 0x01–0x06, 0x07, 0x08 (diagnostics, serial only), 0x0B, 0x0C (comm event
+ * counter/log, serial only), 0x0F, 0x10, 0x14, 0x15, 0x17, 0x2B/0x0E.
  *
  * Transport is injected so unit tests can mock the bus and FreeRTOS can
  * share RS485 with the slave path (mutex + master RX queue).
@@ -111,6 +111,10 @@ uint16_t modbus_master_build_write_multiple_registers(uint16_t start, uint16_t q
 
 /** FC 0x07 — empty request (FC only) */
 uint16_t modbus_master_build_read_exception_status(uint8_t *pdu, uint16_t pdu_max);
+
+/** FC 0x0B / 0x0C — empty requests (FC only, serial line only) */
+uint16_t modbus_master_build_get_comm_event_counter(uint8_t *pdu, uint16_t pdu_max);
+uint16_t modbus_master_build_get_comm_event_log(uint8_t *pdu, uint16_t pdu_max);
 
 /**
  * FC 0x08 Diagnostics (serial line only) — generic builder.
@@ -260,6 +264,32 @@ modbus_status_t modbus_master_diag_read_counter(uint8_t slave,
                                                 uint16_t *value_out,
                                                 uint8_t *exception_code);
 
+/* ---- FC 0x0B / 0x0C Comm Event Counter / Log (serial line only) ---- */
+
+/**
+ * FC 0x0B Get Comm Event Counter — *status_out receives the 2-byte status
+ * word (0x0000 = ready), *event_count_out the comm event counter.
+ */
+modbus_status_t modbus_master_get_comm_event_counter(uint8_t slave,
+                                                     uint16_t *status_out,
+                                                     uint16_t *event_count_out,
+                                                     uint8_t *exception_code);
+
+/**
+ * FC 0x0C Get Comm Event Log — like 0x0B plus *message_count_out and the
+ * event bytes (most-recent first). events_out may hold up to events_max
+ * bytes; *events_len_out receives the actual count (MODBUS_ERROR if the
+ * response carries more events than events_max).
+ */
+modbus_status_t modbus_master_get_comm_event_log(uint8_t slave,
+                                                 uint16_t *status_out,
+                                                 uint16_t *event_count_out,
+                                                 uint16_t *message_count_out,
+                                                 uint8_t *events_out,
+                                                 uint8_t events_max,
+                                                 uint8_t *events_len_out,
+                                                 uint8_t *exception_code);
+
 /**
  * FC 0x14 — single sub-request; regs_out holds record_length registers.
  */
@@ -315,6 +345,23 @@ modbus_status_t modbus_master_parse_exception_status(const uint8_t *pdu, uint16_
 modbus_status_t modbus_master_parse_diagnostics(const uint8_t *pdu, uint16_t pdu_len,
                                                 uint16_t sub_function,
                                                 uint16_t *data_out);
+
+/** Parse FC 0x0B: FC + status(2) + event count(2). */
+modbus_status_t modbus_master_parse_get_comm_event_counter(
+    const uint8_t *pdu, uint16_t pdu_len,
+    uint16_t *status_out, uint16_t *event_count_out);
+
+/**
+ * Parse FC 0x0C: FC + byte count + status(2) + event count(2) +
+ * message count(2) + events. events_out (most-recent first) must hold at
+ * least as many event bytes as the response carries; *events_len_out
+ * receives the count. events_out / events_len_out may be NULL together
+ * to read only the three counters.
+ */
+modbus_status_t modbus_master_parse_get_comm_event_log(
+    const uint8_t *pdu, uint16_t pdu_len,
+    uint16_t *status_out, uint16_t *event_count_out, uint16_t *message_count_out,
+    uint8_t *events_out, uint8_t events_max, uint8_t *events_len_out);
 
 /** Parse FC 0x14 single-sub-request response into regs_out[record_length]. */
 modbus_status_t modbus_master_parse_read_file_record(const uint8_t *pdu, uint16_t pdu_len,

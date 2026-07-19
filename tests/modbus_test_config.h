@@ -9,6 +9,7 @@
  */
 #include "modbus.h"
 #include "modbus_diag.h"
+#include "modbus_event.h"
 #include "modbus_master.h"
 #include "modbus_tcp.h"
 

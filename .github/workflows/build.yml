@@ -165,7 +165,7 @@ jobs:
           gcc -std=c11 -Wall -Wextra -Itests -Iinc -o test_modbus \
             tests/test_modbus.c tests/modbus_crc_standalone.c \
             tests/modbus_host_stubs.c \
-            src/modbus.c src/modbus_diag.c src/modbus_master.c src/modbus_tcp.c
+            src/modbus.c src/modbus_diag.c src/modbus_event.c src/modbus_master.c src/modbus_tcp.c
           ./test_modbus
 
       - name: Build and run FreeRTOS config validation tests

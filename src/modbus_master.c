@@ -130,6 +130,24 @@ uint16_t modbus_master_build_read_exception_status(uint8_t *pdu, uint16_t pdu_ma
     return 1U;
 }
 
+uint16_t modbus_master_build_get_comm_event_counter(uint8_t *pdu, uint16_t pdu_max)
+{
+    if (!pdu || pdu_max < 1U) {
+        return 0U;
+    }
+    pdu[0] = MODBUS_FC_GET_COMM_EVENT_COUNTER;
+    return 1U;
+}
+
+uint16_t modbus_master_build_get_comm_event_log(uint8_t *pdu, uint16_t pdu_max)
+{
+    if (!pdu || pdu_max < 1U) {
+        return 0U;
+    }
+    pdu[0] = MODBUS_FC_GET_COMM_EVENT_LOG;
+    return 1U;
+}
+
 uint16_t modbus_master_build_diagnostics(uint16_t sub_function, uint16_t data,
                                          uint8_t *pdu, uint16_t pdu_max)
 {
@@ -493,6 +511,62 @@ modbus_status_t modbus_master_parse_diagnostics(const uint8_t *pdu, uint16_t pdu
     }
     if (data_out) {
         *data_out = ((uint16_t)pdu[3] << 8) | pdu[4];
+    }
+    return MODBUS_OK;
+}
+
+modbus_status_t modbus_master_parse_get_comm_event_counter(
+    const uint8_t *pdu, uint16_t pdu_len,
+    uint16_t *status_out, uint16_t *event_count_out)
+{
+    if (!pdu || pdu_len != 5U || pdu[0] != MODBUS_FC_GET_COMM_EVENT_COUNTER) {
+        return MODBUS_ERROR;
+    }
+    if (status_out) {
+        *status_out = ((uint16_t)pdu[1] << 8) | pdu[2];
+    }
+    if (event_count_out) {
+        *event_count_out = ((uint16_t)pdu[3] << 8) | pdu[4];
+    }
+    return MODBUS_OK;
+}
+
+modbus_status_t modbus_master_parse_get_comm_event_log(
+    const uint8_t *pdu, uint16_t pdu_len,
+    uint16_t *status_out, uint16_t *event_count_out, uint16_t *message_count_out,
+    uint8_t *events_out, uint8_t events_max, uint8_t *events_len_out)
+{
+    uint8_t byte_count;
+    uint8_t n;
+
+    if (!pdu || pdu_len < 2U || pdu[0] != MODBUS_FC_GET_COMM_EVENT_LOG) {
+        return MODBUS_ERROR;
+    }
+    byte_count = pdu[1];
+    if (byte_count < 6U || pdu_len != (uint16_t)(2U + byte_count)) {
+        return MODBUS_ERROR;
+    }
+    n = (uint8_t)(byte_count - 6U);
+    if ((events_out || events_len_out) && (!events_out || !events_len_out)) {
+        return MODBUS_ERROR; /* events_out and events_len_out come as a pair */
+    }
+    if (events_out && n > events_max) {
+        return MODBUS_ERROR;
+    }
+    if (status_out) {
+        *status_out = ((uint16_t)pdu[2] << 8) | pdu[3];
+    }
+    if (event_count_out) {
+        *event_count_out = ((uint16_t)pdu[4] << 8) | pdu[5];
+    }
+    if (message_count_out) {
+        *message_count_out = ((uint16_t)pdu[6] << 8) | pdu[7];
+    }
+    if (events_out) {
+        for (uint8_t i = 0; i < n; i++) {
+            events_out[i] = pdu[8U + i];
+        }
+        *events_len_out = n;
     }
     return MODBUS_OK;
 }
@@ -925,6 +999,74 @@ modbus_status_t modbus_master_diag_read_counter(uint8_t slave,
     }
     return modbus_master_parse_diagnostics(resp, resp_len, sub_function,
                                            value_out);
+}
+
+/* ============================================================
+ * FC 0x0B / 0x0C Comm Event Counter / Log (serial line only)
+ * ============================================================ */
+
+modbus_status_t modbus_master_get_comm_event_counter(uint8_t slave,
+                                                     uint16_t *status_out,
+                                                     uint16_t *event_count_out,
+                                                     uint8_t *exception_code)
+{
+    uint8_t req[1];
+    uint8_t resp[MODBUS_RTU_FRAME_MAX];
+    uint16_t resp_len = 0U;
+    uint16_t req_len;
+    modbus_status_t st;
+
+    /* FC 0x0B is not broadcast-executable */
+    if (slave == 0U) {
+        return MODBUS_ERROR;
+    }
+    req_len = modbus_master_build_get_comm_event_counter(req, sizeof(req));
+    if (req_len == 0U) {
+        return MODBUS_ERROR;
+    }
+    st = master_xact_and_check_echo_addr(slave, req, req_len, resp, &resp_len,
+                                         sizeof(resp), exception_code);
+    if (st != MODBUS_OK) {
+        return st;
+    }
+    return modbus_master_parse_get_comm_event_counter(resp, resp_len,
+                                                      status_out,
+                                                      event_count_out);
+}
+
+modbus_status_t modbus_master_get_comm_event_log(uint8_t slave,
+                                                 uint16_t *status_out,
+                                                 uint16_t *event_count_out,
+                                                 uint16_t *message_count_out,
+                                                 uint8_t *events_out,
+                                                 uint8_t events_max,
+                                                 uint8_t *events_len_out,
+                                                 uint8_t *exception_code)
+{
+    uint8_t req[1];
+    uint8_t resp[MODBUS_RTU_FRAME_MAX];
+    uint16_t resp_len = 0U;
+    uint16_t req_len;
+    modbus_status_t st;
+
+    /* FC 0x0C is not broadcast-executable */
+    if (slave == 0U) {
+        return MODBUS_ERROR;
+    }
+    req_len = modbus_master_build_get_comm_event_log(req, sizeof(req));
+    if (req_len == 0U) {
+        return MODBUS_ERROR;
+    }
+    st = master_xact_and_check_echo_addr(slave, req, req_len, resp, &resp_len,
+                                         sizeof(resp), exception_code);
+    if (st != MODBUS_OK) {
+        return st;
+    }
+    return modbus_master_parse_get_comm_event_log(resp, resp_len,
+                                                  status_out, event_count_out,
+                                                  message_count_out,
+                                                  events_out, events_max,
+                                                  events_len_out);
 }
 
 modbus_status_t modbus_master_read_file_record(uint8_t slave, uint16_t file_number,

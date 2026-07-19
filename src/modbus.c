@@ -1,5 +1,6 @@
 #include "modbus.h"
 #include "modbus_diag.h"
+#include "modbus_event.h"
 #include "digital_io.h"
 #include "analog_io.h"
 #include "relay.h"
@@ -98,6 +99,7 @@ void modbus_rtu_init(uint8_t slave_id)
     modbus_slave_id = slave_id;
     modbus_crc_init_tables();
     modbus_diag_reset();
+    modbus_event_reset();
     for (uint16_t i = 0; i < MODBUS_MAX_REGISTERS; i++) {
         holding_regs[i] = 0;
         input_regs[i]  = 0;
@@ -798,13 +800,36 @@ modbus_status_t modbus_rtu_process(uint8_t *rx_buf, uint16_t rx_len,
     uint8_t tx_pdu[MODBUS_RTU_FRAME_MAX] = {0};
     uint16_t tx_pdu_len = 0;
 
+    uint8_t fc = rx_pdu[0];
+    uint8_t is_fetch = (fc == MODBUS_FC_GET_COMM_EVENT_COUNTER ||
+                        fc == MODBUS_FC_GET_COMM_EVENT_LOG);
     /*
-     * FC 0x08 Diagnostics is serial-line only: intercept it here, before
-     * the shared PDU dispatcher. Modbus TCP needs no change — its
-     * modbus_pdu_process() default: path rejects 0x08 as Illegal Function.
+     * FC 0x08 sub 0x01 (Restart Comm) and sub 0x0A (Clear Counters) reset
+     * the comm event counter; the completing message itself must not
+     * re-increment it afterwards.
      */
-    if (rx_pdu_len >= 1U && rx_pdu[0] == MODBUS_FC_DIAGNOSTICS) {
+    uint8_t resets_events = 0U;
+    if (fc == MODBUS_FC_DIAGNOSTICS && rx_pdu_len >= 3U) {
+        uint16_t sub = ((uint16_t)rx_pdu[1] << 8) | rx_pdu[2];
+        resets_events = (sub == MODBUS_DIAG_SUB_RESTART_COMM ||
+                         sub == MODBUS_DIAG_SUB_CLEAR_COUNTERS);
+    }
+
+    /*
+     * FC 0x08 Diagnostics and FC 0x0B/0x0C Comm Event Counter/Log are
+     * serial-line only: intercept them here, before the shared PDU
+     * dispatcher. Modbus TCP needs no change — its modbus_pdu_process()
+     * default: path rejects all three as Illegal Function.
+     */
+    if (fc == MODBUS_FC_DIAGNOSTICS) {
         tx_pdu_len = modbus_diag_process(rx_pdu, rx_pdu_len, tx_pdu, is_broadcast);
+    } else if (is_fetch) {
+        if (modbus_diag_listen_only()) {
+            /* Listen-only: monitored, never answered */
+            tx_pdu_len = 0;
+        } else {
+            tx_pdu_len = modbus_event_process(rx_pdu, rx_pdu_len, tx_pdu, is_broadcast);
+        }
     } else if (modbus_diag_listen_only()) {
         /* Listen-only: messages are monitored, but no action is taken and
          * no response is sent (V1.1b3 §6.8 sub 0x04). */
@@ -815,8 +840,42 @@ modbus_status_t modbus_rtu_process(uint8_t *rx_buf, uint16_t rx_len,
                                                      is_broadcast);
         if (status != MODBUS_OK) return status;
     }
-    modbus_diag_note_result(tx_pdu_len > 0U,
-                            tx_pdu_len > 0U && (tx_pdu[0] & 0x80U));
+
+    uint8_t responded = (tx_pdu_len > 0U);
+    /*
+     * Bit 7 of tx_pdu[0] marks an exception response — also for broadcasts,
+     * where the exception PDU is built but not sent.
+     */
+    uint8_t exception_raised = ((tx_pdu[0] & 0x80U) != 0U);
+
+    /*
+     * A broadcast that was actually executed leaves its function code in
+     * tx_pdu[0] (with bit 7 set on exception). An unsupported broadcast FC
+     * is dropped by modbus_pdu_process() before tx_pdu is touched, leaving
+     * tx_pdu[0] == 0 — that is NOT a successful message completion and
+     * must not bump the comm event counter.
+     */
+    uint8_t broadcast_executed = (is_broadcast && tx_pdu[0] != 0U);
+
+    modbus_diag_note_result(responded, responded && exception_raised);
+
+    /*
+     * FC 0x0B/0x0C bookkeeping (V1.1b3 §6.9/§6.10):
+     *  - log a send event for every transmitted response (the fetch
+     *    responses themselves are excluded, so a 0x0C snapshot never
+     *    reports its own send event);
+     *  - increment the comm event counter once per successful message
+     *    completion (normal response, or broadcast executed silently);
+     *    never for exception responses, fetch commands, listen-only
+     *    monitoring, or the counter-resetting diag commands.
+     */
+    if (!is_fetch && responded) {
+        modbus_event_note_tx(exception_raised ? tx_pdu[1] : 0U);
+    }
+    if (!is_fetch && !exception_raised && !resets_events &&
+        !modbus_diag_listen_only() && (responded || broadcast_executed)) {
+        modbus_event_note_success();
+    }
 
     if (tx_pdu_len == 0) {
         *tx_len = 0;
