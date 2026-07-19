@@ -47,7 +47,9 @@
 #define DO_PIN_5            GPIO_PIN_9
 #define DO_PIN_6            GPIO_PIN_10
 #define DO_PIN_7            GPIO_PIN_14
-#define DO_PIN_MASK         0x5703U
+/* Mask of DO_PIN_0..7 on GPIOB: {0,1,5,6,8,9,10,14} — must match the
+ * individual DO_PIN_n defines exactly (checked by scripts/check_pin_conflicts.py) */
+#define DO_PIN_MASK         0x4763U
 #define DO_COUNT            8
 
 /* ============================================================

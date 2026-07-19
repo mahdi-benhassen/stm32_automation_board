@@ -100,7 +100,7 @@ Tags starting with `v` trigger a release with firmware artifacts.
 | DI4    | PE4  | DO4    | PB8  |
 | DI5    | PE5  | DO5    | PB9  |
 | DI6    | PE6  | DO6    | PB10 |
-| DI7    | PE7  | DO7    | PB12 |
+| DI7    | PE7  | DO7    | PB14 |
 
 ### Analog I/O
 | Signal | Pin     | ADC Channel  |
