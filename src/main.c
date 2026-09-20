@@ -8,7 +8,6 @@ static void rs232_modbus_rx_callback(uint8_t *data, uint16_t len);
 static void eth_modbus_callback(uint8_t *data, uint16_t len);
 
 static canopen_node_t g_canopen_node;
-static void canopen_app_sync_outputs(void);
 static void master_yield_pump(void);
 
 
@@ -301,7 +300,19 @@ static void eth_modbus_callback(uint8_t *data, uint16_t len)
     }
 }
 
-static void canopen_app_sync_outputs(void)
+void canopen_app_sync_inputs(void)
+{
+    uint8_t di = digital_inputs_read_all();
+    canopen_set_digital_inputs(&g_canopen_node, di);
+
+    uint16_t ai_buf[AI_COUNT];
+    analog_inputs_scan_all(ai_buf);
+    for (uint8_t i = 0; i < AI_COUNT; i++) {
+        canopen_set_analog_input(&g_canopen_node, i, (int16_t)ai_buf[i]);
+    }
+}
+
+void canopen_app_sync_outputs(void)
 {
     static uint8_t s_last_do = 0x00U;
     uint8_t do_val = canopen_get_digital_outputs(&g_canopen_node);
