@@ -175,6 +175,8 @@
 #define CAN_RX_PIN          GPIO_PIN_11
 #define CAN_GPIO_CLK_ENABLE() __HAL_RCC_GPIOA_CLK_ENABLE()
 #define CAN_AF              GPIO_AF9_CAN1
+#define CANOPEN_NODE_ID     1U
+
 
 /* ============================================================
  * Ethernet Interface (RMII)

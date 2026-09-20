@@ -79,14 +79,17 @@ bool can_driver_init(uint32_t baudrate)
     CAN_CLK_ENABLE();
     CAN_GPIO_CLK_ENABLE();
 
-    /* GPIO Initialization: TX (PA12) and RX (PA11) */
+    /* GPIO Initialization: TX and RX pins */
     GPIO_InitTypeDef gpio_init = {0};
-    gpio_init.Pin       = CAN_TX_PIN | CAN_RX_PIN;
+    gpio_init.Pin       = CAN_TX_PIN;
     gpio_init.Mode      = GPIO_MODE_AF_PP;
     gpio_init.Pull      = GPIO_PULLUP;
     gpio_init.Speed     = GPIO_SPEED_FREQ_VERY_HIGH;
     gpio_init.Alternate = CAN_AF;
     HAL_GPIO_Init(CAN_TX_PORT, &gpio_init);
+
+    gpio_init.Pin       = CAN_RX_PIN;
+    HAL_GPIO_Init(CAN_RX_PORT, &gpio_init);
 
     /* Controller Initialization */
     hcan1.Instance                  = CAN_INSTANCE;

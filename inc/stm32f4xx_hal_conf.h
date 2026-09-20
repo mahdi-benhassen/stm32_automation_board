@@ -34,6 +34,7 @@ extern "C" {
 
 #define HAL_MODULE_ENABLED
 #define HAL_ADC_MODULE_ENABLED
+#define HAL_CAN_MODULE_ENABLED
 #define HAL_CORTEX_MODULE_ENABLED
 #define HAL_DAC_MODULE_ENABLED
 #define HAL_DMA_MODULE_ENABLED
@@ -44,6 +45,10 @@ extern "C" {
 #define HAL_RCC_MODULE_ENABLED
 #define HAL_TIM_MODULE_ENABLED
 #define HAL_UART_MODULE_ENABLED
+
+#ifdef HAL_CAN_MODULE_ENABLED
+  #include "stm32f4xx_hal_can.h"
+#endif
 
 #ifdef HAL_RCC_MODULE_ENABLED
   #include "stm32f4xx_hal_rcc.h"

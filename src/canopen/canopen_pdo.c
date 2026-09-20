@@ -41,14 +41,18 @@ void canopen_pdo_process(canopen_pdo_t *pdo, uint32_t delta_ms, bool is_operatio
 
     /* Cooldown inhibit counters regardless of state */
     if (pdo->tpdo1.inhibit_counter_ms > 0U) {
-        pdo->tpdo1.inhibit_counter_ms = (delta_ms >= pdo->tpdo1.inhibit_counter_ms)
-                                            ? 0U
-                                            : (pdo->tpdo1.inhibit_counter_ms - (uint16_t)delta_ms);
+        if (delta_ms >= pdo->tpdo1.inhibit_counter_ms) {
+            pdo->tpdo1.inhibit_counter_ms = 0U;
+        } else {
+            pdo->tpdo1.inhibit_counter_ms -= (uint16_t)delta_ms;
+        }
     }
     if (pdo->tpdo2.inhibit_counter_ms > 0U) {
-        pdo->tpdo2.inhibit_counter_ms = (delta_ms >= pdo->tpdo2.inhibit_counter_ms)
-                                            ? 0U
-                                            : (pdo->tpdo2.inhibit_counter_ms - (uint16_t)delta_ms);
+        if (delta_ms >= pdo->tpdo2.inhibit_counter_ms) {
+            pdo->tpdo2.inhibit_counter_ms = 0U;
+        } else {
+            pdo->tpdo2.inhibit_counter_ms -= (uint16_t)delta_ms;
+        }
     }
 
     /* PDO transmissions only occur in OPERATIONAL state */

@@ -29,6 +29,10 @@ uint8_t modbus_master_rtu_is_waiting(void);
  */
 void modbus_master_rtu_on_frame(const uint8_t *data, uint16_t len);
 
+/** Optional cooperative yield hook called during master wait loops */
+typedef void (*modbus_master_yield_fn_t)(void);
+void modbus_master_rtu_set_yield_callback(modbus_master_yield_fn_t yield_fn);
+
 #ifdef __cplusplus
 }
 #endif

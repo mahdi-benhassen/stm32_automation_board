@@ -43,7 +43,7 @@ static void test_crc_known_value(void)
 static void test_crc_empty(void)
 {
     TEST("CRC-16 empty frame");
-    uint16_t crc = modbus_crc16((uint8_t[]){}, 0);
+    uint16_t crc = modbus_crc16((uint8_t[]){0}, 0);
     ASSERT_EQ(crc, 0xFFFF);
     PASS();
 }

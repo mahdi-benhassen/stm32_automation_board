@@ -6,7 +6,7 @@
 #include <stdint.h>
 
 /* Modbus TCP Application Data Unit (ADU) */
-#define MODBUS_TCP_MBAP_SIZE    7
+#define MODBUS_TCP_MBAP_SIZE    7U
 /* A Modbus PDU is limited to 253 bytes (Modbus Application Protocol V1.1b3). */
 #define MODBUS_TCP_MAX_PDU      253U
 #define MODBUS_TCP_MAX_ADU      (MODBUS_TCP_MBAP_SIZE + MODBUS_TCP_MAX_PDU)

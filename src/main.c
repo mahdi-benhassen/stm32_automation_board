@@ -7,6 +7,11 @@ static void rs485_modbus_rx_callback(uint8_t *data, uint16_t len);
 static void rs232_modbus_rx_callback(uint8_t *data, uint16_t len);
 static void eth_modbus_callback(uint8_t *data, uint16_t len);
 
+static canopen_node_t g_canopen_node;
+static void canopen_app_sync_outputs(void);
+static void master_yield_pump(void);
+
+
 /* ============================================================
  * Modbus Master Demo (issue #9) — see board_config.h for the defines.
  *
@@ -167,11 +172,18 @@ int main(void)
     rs485_init(RS485_BAUDRATE);
     rs232_init(RS232_BAUDRATE);
     ethernet_init();
+    can_driver_init(CAN_BAUDRATE);
 
     /* Initialize Modbus stacks (slave + master share RS485) */
     modbus_rtu_init(MODBUS_RTU_ADDRESS);
     modbus_tcp_init(MODBUS_SLAVE_ID);
     modbus_master_rtu_init();
+    modbus_master_rtu_set_yield_callback(master_yield_pump);
+
+    /* Initialize CANopen stack (CiA 301 / CiA 401 Automation Node) */
+    can_driver_filter_config(CANOPEN_NODE_ID);
+    canopen_init(&g_canopen_node, CANOPEN_NODE_ID, NULL, can_driver_transmit);
+    can_driver_start();
 
     /* Set callback handlers */
     rs485_set_rx_callback(rs485_modbus_rx_callback);
@@ -190,15 +202,29 @@ int main(void)
 
         /* Scan inputs every 10ms */
         if ((now - last_scan_tick) >= 10) {
+            uint32_t delta_ms = now - last_scan_tick;
             last_scan_tick = now;
             digital_inputs_scan();
+            uint8_t di = digital_inputs_read_all();
+            canopen_set_digital_inputs(&g_canopen_node, di);
 
             uint16_t ai_buf[AI_COUNT];
             analog_inputs_scan_all(ai_buf);
             for (uint8_t i = 0; i < AI_COUNT; i++) {
                 modbus_write_holding_register(MODBUS_HOLDING_REG_OFFSET + 100 + i, ai_buf[i]);
+                canopen_set_analog_input(&g_canopen_node, i, (int16_t)ai_buf[i]);
             }
+            modbus_sync_inputs();
+
+            canopen_process(&g_canopen_node, delta_ms);
         }
+
+        /* Process CANopen incoming frames and outputs */
+        canopen_frame_t rx_frame;
+        while (can_driver_receive(&rx_frame)) {
+            canopen_rx_frame(&g_canopen_node, rx_frame.cob_id, rx_frame.data, rx_frame.len);
+        }
+        canopen_app_sync_outputs();
 
         /* Process RS485 (handled via interrupt + callback) */
         rs485_process();
@@ -274,6 +300,50 @@ static void eth_modbus_callback(uint8_t *data, uint16_t len)
         ethernet_send(response, resp_len);
     }
 }
+
+static void canopen_app_sync_outputs(void)
+{
+    static uint8_t s_last_do = 0x00U;
+    uint8_t do_val = canopen_get_digital_outputs(&g_canopen_node);
+    if (do_val != s_last_do) {
+        s_last_do = do_val;
+        digital_outputs_write_all(do_val);
+    }
+
+    static int16_t s_last_ao[AO_COUNT] = {0, 0};
+    for (uint8_t i = 0; i < AO_COUNT; i++) {
+        int16_t ao_val = canopen_get_analog_output(&g_canopen_node, i);
+        if (ao_val != s_last_ao[i]) {
+            s_last_ao[i] = ao_val;
+            if (ao_val >= 0 && ao_val <= (int16_t)DAC_RESOLUTION) {
+                analog_output_write_raw(i, (uint16_t)ao_val);
+            }
+        }
+    }
+}
+
+static void master_yield_pump(void)
+{
+    static uint32_t s_last_yield_tick = 0;
+    uint32_t now = sys_tick;
+    uint32_t delta = now - s_last_yield_tick;
+    s_last_yield_tick = now;
+
+    /* Service CANopen incoming frames and periodic timers */
+    canopen_frame_t rx_frame;
+    while (can_driver_receive(&rx_frame)) {
+        canopen_rx_frame(&g_canopen_node, rx_frame.cob_id, rx_frame.data, rx_frame.len);
+    }
+    if (delta > 0) {
+        canopen_process(&g_canopen_node, delta);
+    }
+    canopen_app_sync_outputs();
+
+    /* Service RS232 and Ethernet */
+    rs232_process();
+    ethernet_process();
+}
+
 
 void NMI_Handler(void) { while (1); }
 void HardFault_Handler(void) { while (1); }

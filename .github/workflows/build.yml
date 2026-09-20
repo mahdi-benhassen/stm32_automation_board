@@ -111,6 +111,15 @@ jobs:
             src/modbus.c src/modbus_diag.c src/modbus_event.c src/modbus_master.c src/modbus_tcp.c
           ./test_modbus
 
+      - name: Build and run native CANopen protocol tests
+        run: |
+          gcc -Wall -Wextra -Werror -Itests -Iinc -Iinc/canopen -DTEST -o test_canopen \
+            tests/test_canopen.c src/can_driver.c \
+            src/canopen/canopen.c src/canopen/canopen_nmt.c \
+            src/canopen/canopen_od.c src/canopen/canopen_pdo.c \
+            src/canopen/canopen_sdo.c
+          ./test_canopen
+
   lint:
     runs-on: ubuntu-latest
     steps:

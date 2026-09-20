@@ -13,6 +13,8 @@
 #include "rs485.h"
 #include "rs232.h"
 #include "ethernet.h"
+#include "can_driver.h"
+#include "canopen/canopen.h"
 #include "modbus.h"
 #include "modbus_master.h"
 #include "modbus_master_rtu.h"

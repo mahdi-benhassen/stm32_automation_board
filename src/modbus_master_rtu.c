@@ -9,6 +9,7 @@ static volatile uint8_t s_frame_ready = 0U;
 static uint8_t s_frame[MODBUS_RTU_FRAME_MAX];
 static volatile uint16_t s_frame_len = 0U;
 static modbus_master_transport_t s_transport;
+static modbus_master_yield_fn_t s_yield_cb = NULL;
 
 uint8_t modbus_master_rtu_is_waiting(void)
 {
@@ -78,6 +79,9 @@ static modbus_status_t master_rtu_recv(uint8_t *adu, uint16_t max_len, uint16_t 
     while ((sys_tick - start) < timeout_ms) {
         /* Drive T3.5 framing while waiting for the remote slave */
         rs485_process();
+        if (s_yield_cb != NULL) {
+            s_yield_cb();
+        }
         if (s_frame_ready) {
             uint16_t n = s_frame_len;
             if (n > max_len) {
@@ -119,3 +123,9 @@ void modbus_master_rtu_init(void)
     modbus_master_init(&s_transport);
     modbus_master_set_timeout_ms(MODBUS_MASTER_DEFAULT_TIMEOUT_MS);
 }
+
+void modbus_master_rtu_set_yield_callback(modbus_master_yield_fn_t cb)
+{
+    s_yield_cb = cb;
+}
+
