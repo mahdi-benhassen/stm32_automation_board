@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
-project(stm32_automation_board C ASM)
+project(stm32_automation_board VERSION 2.0.0 LANGUAGES C ASM)
+
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)

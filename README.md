@@ -14,7 +14,10 @@ Industrial automation controller based on STM32F407 with Ethernet, RS485, and Mo
 - **Ethernet** 10/100M RMII with built-in MAC (external PHY: LAN8720/DP83848)
 - **Modbus RTU** dual-role over RS485: **slave** (default) + **master** API (shares the bus); slave also served on RS232
 - **Modbus TCP** (server) over Ethernet, port 502
-- **Extended Modbus FCs**: 0x07, 0x08 (diagnostics, serial only), 0x14, 0x15, 0x17, 0x2B/0x0E (slave + master)
+- **Extended Modbus FCs**: 0x01..0x08, 0x0B, 0x0C, 0x0F, 0x10, 0x11, 0x14, 0x15, 0x16, 0x17, 0x18, 0x2B/0x0E (slave + master)
+- **Decoupled Modbus Sync Hooks**: dynamic runtime registration and weak fallbacks for custom hardware/PLC integration
+- **CANopen CiA 301 v4.2 & CiA 401 v3.0**: bxCAN at 500 kbps (PA11/PA12), NMT slave, Heartbeat, SDO expedited/segmented server, PDO engine (TPDO1/2, RPDO1/2), CanFestival `objdictgen` compatible
+
 
 ## Modbus RTU Master API
 
@@ -161,6 +164,9 @@ Tags starting with `v` trigger a release with firmware artifacts.
 | RS485 DE | PD7  | Direction ctrl  |
 | RS232 TX | PA9  | USART1_TX       |
 | RS232 RX | PA10 | USART1_RX       |
+| CAN RX   | PA11 | CAN1_RX (AF9)   |
+| CAN TX   | PA12 | CAN1_TX (AF9)   |
+
 
 ### Ethernet (RMII)
 | Signal      | Pin  |
