@@ -1894,6 +1894,99 @@ static void test_tcp_rejects_fc08(void)
 }
 
 /* ============================================================
+ * Custom Register Mapping & Sync Hooks Tests (Issue #13)
+ * ============================================================ */
+
+static uint32_t s_custom_written_count = 0;
+static uint32_t s_custom_refresh_count = 0;
+static void *s_custom_received_ctx = NULL;
+
+static void custom_sync_on_write(void *ctx)
+{
+    s_custom_written_count++;
+    s_custom_received_ctx = ctx;
+}
+
+static void custom_sync_on_refresh(void *ctx)
+{
+    s_custom_refresh_count++;
+    s_custom_received_ctx = ctx;
+}
+
+static void test_custom_sync_hooks_on_write(void)
+{
+    TEST("Custom sync hook invoked on write FC 0x05 / 0x06");
+    modbus_rtu_init(1);
+    s_custom_written_count = 0;
+    s_custom_received_ctx = NULL;
+
+    int dummy_ctx = 0x42;
+    modbus_sync_hooks_t hooks = {
+        .on_registers_written = custom_sync_on_write,
+        .on_inputs_refresh = custom_sync_on_refresh,
+        .user_ctx = &dummy_ctx
+    };
+    modbus_register_sync_hooks(&hooks);
+
+    /* Execute write single coil (FC 0x05) */
+    uint8_t req05[] = {0x01, 0x05, 0x00, 0x01, 0xFF, 0x00};
+    uint8_t tx[MODBUS_RTU_FRAME_MAX];
+    uint16_t tx_len = 0;
+    uint16_t crc = modbus_crc16(req05, 6);
+    uint8_t frame[8];
+    memcpy(frame, req05, 6);
+    frame[6] = crc & 0xFF;
+    frame[7] = (crc >> 8) & 0xFF;
+
+    ASSERT_EQ(modbus_rtu_process(frame, 8, tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(s_custom_written_count, 1);
+    ASSERT_EQ(s_custom_received_ctx, &dummy_ctx);
+
+    /* Execute write single register (FC 0x06) */
+    uint8_t req06[] = {0x01, 0x06, 0x00, 0x02, 0x12, 0x34};
+    crc = modbus_crc16(req06, 6);
+    memcpy(frame, req06, 6);
+    frame[6] = crc & 0xFF;
+    frame[7] = (crc >> 8) & 0xFF;
+
+    ASSERT_EQ(modbus_rtu_process(frame, 8, tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(s_custom_written_count, 2);
+
+    /* Test unregistering restores defaults */
+    modbus_register_sync_hooks(NULL);
+    ASSERT_EQ(modbus_rtu_process(frame, 8, tx, &tx_len), MODBUS_OK);
+    ASSERT_EQ(s_custom_written_count, 2); /* Did not increment */
+
+    PASS();
+}
+
+static void test_custom_sync_hooks_on_refresh(void)
+{
+    TEST("Custom sync hook invoked on modbus_sync_inputs()");
+    modbus_rtu_init(1);
+    s_custom_refresh_count = 0;
+    s_custom_received_ctx = NULL;
+
+    int dummy_ctx = 0x99;
+    modbus_sync_hooks_t hooks = {
+        .on_registers_written = custom_sync_on_write,
+        .on_inputs_refresh = custom_sync_on_refresh,
+        .user_ctx = &dummy_ctx
+    };
+    modbus_register_sync_hooks(&hooks);
+
+    modbus_sync_inputs();
+    ASSERT_EQ(s_custom_refresh_count, 1);
+    ASSERT_EQ(s_custom_received_ctx, &dummy_ctx);
+
+    modbus_register_sync_hooks(NULL);
+    modbus_sync_inputs();
+    ASSERT_EQ(s_custom_refresh_count, 1); /* Did not increment */
+
+    PASS();
+}
+
+/* ============================================================
  * Main
  * ============================================================ */
 
@@ -2027,6 +2120,10 @@ int main(void)
     test_master_parse_regs();
     test_master_parse_fc14();
     test_master_parse_fc2b_header();
+
+    printf("\n[Custom Register Mapping & Sync Hooks Tests — issue #13]\n");
+    test_custom_sync_hooks_on_write();
+    test_custom_sync_hooks_on_refresh();
 
     printf("\n=== Results ===\n");
     printf("  Total:  %d\n", tests_run);

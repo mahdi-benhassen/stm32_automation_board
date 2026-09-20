@@ -176,24 +176,61 @@ accessor API for everything else.
 
 ## 5. Customization without editing `modbus.c`
 
-If you want to keep `src/modbus.c` untouched across upgrades, move your mapping
-into a separate file: declare a weak hook or a registered callback in your own
-code, e.g.
+The codebase natively provides two clean mechanisms to decouple your application logic from `src/modbus.c`:
+
+### Option A: Runtime Registration (`modbus_register_sync_hooks`)
+
+You can register application callbacks dynamically with a context pointer:
 
 ```c
-/* in modbus.c — default does nothing */
-__weak void modbus_app_sync(void) { }
+#include "modbus.h"
 
-/* called from modbus_sync_registers() */
-static void modbus_sync_registers(void) { modbus_app_sync(); }
+static void my_app_on_written(void *ctx)
+{
+    /* Invoked after every successful write FC (0x05, 0x06, 0x0F, 0x10, 0x15, 0x16, 0x17) */
+    uint16_t setpoint = modbus_read_holding_register(0);
+    apply_pwm_setpoint(setpoint);
+}
 
-/* in your app file — strong definition overrides the weak one */
-void modbus_app_sync(void) { /* your mapping here */ }
+static void my_app_on_inputs_refresh(void *ctx)
+{
+    /* Invoked by modbus_sync_inputs() */
+    modbus_write_holding_register(100, read_temperature_sensor());
+}
+
+void app_init(void)
+{
+    modbus_rtu_init(1);
+
+    static const modbus_sync_hooks_t my_hooks = {
+        .on_registers_written = my_app_on_written,
+        .on_inputs_refresh    = my_app_inputs_refresh,
+        .user_ctx             = NULL
+    };
+    modbus_register_sync_hooks(&my_hooks);
+}
 ```
 
-That keeps all board knowledge out of the protocol file. (The stock firmware
-currently keeps the mapping in `modbus.c` directly for simplicity — both
-patterns are valid.)
+### Option B: Link-Time Weak Symbol Override
+
+`modbus.c` defines `modbus_app_sync_registers()` and `modbus_app_sync_inputs()` with `__attribute__((weak))` (or `__weak` on ARM CC). You can simply provide a strong implementation in any application file:
+
+```c
+/* In your custom application file (e.g. main.c or app_io.c) */
+void modbus_app_sync_registers(void)
+{
+    /* Drives custom GPIOs on STM32F767 or custom board */
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, modbus_read_coil(0) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+}
+
+void modbus_app_sync_inputs(void)
+{
+    /* Reads custom sensors */
+    modbus_write_holding_register(10, read_adc_val());
+}
+```
+
+When defined, the linker binds your strong function automatically, keeping `modbus.c` 100% untouched across upstream upgrades. See `examples/custom_register_map/` for a complete reference project.
 
 ## 6. Summary
 
@@ -205,3 +242,4 @@ patterns are valid.)
 - Hardware-bound map → rewrite the sync body with your drivers, keep it fast,
   and pick on-request vs. periodic input refresh.
 - Sizes and base offsets are in `inc/board_config.h`.
+

@@ -144,4 +144,37 @@ uint8_t modbus_fifo_push(uint16_t fifo_addr, uint16_t value);
 
 void modbus_sync_inputs(void);
 
+/* ============================================================
+ * Application Sync Hooks (Issue #13: Custom Register Mapping)
+ * ============================================================ */
+
+typedef void (*modbus_sync_cb_t)(void *user_ctx);
+
+typedef struct {
+    modbus_sync_cb_t on_registers_written; /* Called after write FCs (0x05, 0x06, 0x0F, 0x10, 0x15, 0x16, 0x17) */
+    modbus_sync_cb_t on_inputs_refresh;    /* Called by modbus_sync_inputs() or before read FCs */
+    void            *user_ctx;             /* User context passed to callbacks */
+} modbus_sync_hooks_t;
+
+/**
+ * Register runtime callbacks for hardware/application synchronization.
+ * If set, replaces the default board sync logic. Pass NULL to restore defaults.
+ */
+void modbus_register_sync_hooks(const modbus_sync_hooks_t *hooks);
+
+/**
+ * Weak application sync hooks: can be overridden at link time by defining
+ * these functions in your application code without modifying modbus.c.
+ */
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((weak)) void modbus_app_sync_registers(void);
+__attribute__((weak)) void modbus_app_sync_inputs(void);
+#elif defined(__CC_ARM) || defined(__ARMCC_VERSION)
+__weak void modbus_app_sync_registers(void);
+__weak void modbus_app_sync_inputs(void);
+#else
+void modbus_app_sync_registers(void);
+void modbus_app_sync_inputs(void);
+#endif
+
 #endif /* MODBUS_H */

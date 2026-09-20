@@ -4,6 +4,7 @@
 #include "digital_io.h"
 #include "analog_io.h"
 #include "relay.h"
+#include <string.h>
 
 static uint8_t modbus_slave_id = 1;
 static uint16_t holding_regs[MODBUS_MAX_REGISTERS] = {0};
@@ -255,7 +256,27 @@ static const char *modbus_devid_object_str(uint8_t object_id, uint8_t *len_out)
     return s;
 }
 
-static void modbus_sync_registers(void)
+/* ============================================================
+ * Application Sync Hooks (Issue #13: Custom Register Mapping)
+ * ============================================================ */
+
+static modbus_sync_hooks_t s_sync_hooks = {0};
+
+void modbus_register_sync_hooks(const modbus_sync_hooks_t *hooks)
+{
+    if (hooks != NULL) {
+        s_sync_hooks = *hooks;
+    } else {
+        memset(&s_sync_hooks, 0, sizeof(s_sync_hooks));
+    }
+}
+
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((weak))
+#elif defined(__CC_ARM) || defined(__ARMCC_VERSION)
+__weak
+#endif
+void modbus_app_sync_registers(void)
 {
     for (uint8_t i = 0; i < DO_COUNT; i++) {
         uint8_t state = modbus_bit_read(coil_bits, MODBUS_COIL_OFFSET + i);
@@ -280,7 +301,12 @@ static void modbus_sync_registers(void)
     }
 }
 
-void modbus_sync_inputs(void)
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((weak))
+#elif defined(__CC_ARM) || defined(__ARMCC_VERSION)
+__weak
+#endif
+void modbus_app_sync_inputs(void)
 {
     uint8_t di = digital_inputs_read_all();
     for (uint8_t i = 0; i < DI_COUNT; i++) {
@@ -290,6 +316,24 @@ void modbus_sync_inputs(void)
     for (uint8_t i = 0; i < AI_COUNT; i++) {
         input_regs[MODBUS_INPUT_REG_OFFSET + i] =
             holding_regs[MODBUS_HOLDING_REG_OFFSET + 100 + i];
+    }
+}
+
+static void modbus_sync_registers(void)
+{
+    if (s_sync_hooks.on_registers_written != NULL) {
+        s_sync_hooks.on_registers_written(s_sync_hooks.user_ctx);
+    } else {
+        modbus_app_sync_registers();
+    }
+}
+
+void modbus_sync_inputs(void)
+{
+    if (s_sync_hooks.on_inputs_refresh != NULL) {
+        s_sync_hooks.on_inputs_refresh(s_sync_hooks.user_ctx);
+    } else {
+        modbus_app_sync_inputs();
     }
 }
 

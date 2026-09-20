@@ -163,6 +163,20 @@
 #define RS232_TIMEOUT_MS    50
 
 /* ============================================================
+ * CAN Interface - CAN1
+ * bxCAN 500 kbps (CANopen default)
+ * ============================================================ */
+#define CAN_INSTANCE        CAN1
+#define CAN_CLK_ENABLE()    __HAL_RCC_CAN1_CLK_ENABLE()
+#define CAN_BAUDRATE        500000U
+#define CAN_TX_PORT         GPIOA
+#define CAN_TX_PIN          GPIO_PIN_12
+#define CAN_RX_PORT         GPIOA
+#define CAN_RX_PIN          GPIO_PIN_11
+#define CAN_GPIO_CLK_ENABLE() __HAL_RCC_GPIOA_CLK_ENABLE()
+#define CAN_AF              GPIO_AF9_CAN1
+
+/* ============================================================
  * Ethernet Interface (RMII)
  * STM32F407 built-in MAC + external PHY (LAN8720/DP83848)
  * ============================================================ */
